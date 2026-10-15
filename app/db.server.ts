@@ -15,7 +15,10 @@ function databaseUrl() {
     process.env.NEON_DATABASE_URL;
   if (!raw) return undefined;
   const url = new URL(raw);
-  if (url.hostname.includes("-pooler")) url.searchParams.set("pgbouncer", "true");
+  // Neon (ep-…-pooler) and Supabase's transaction pooler (port 6543) run PgBouncer.
+  if (url.hostname.includes("-pooler") || url.port === "6543") {
+    url.searchParams.set("pgbouncer", "true");
+  }
   if (process.env.DB_SCHEMA) url.searchParams.set("schema", process.env.DB_SCHEMA);
   if (!url.searchParams.has("connection_limit")) {
     url.searchParams.set("connection_limit", "1");
