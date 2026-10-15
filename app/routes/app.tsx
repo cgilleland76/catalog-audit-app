@@ -1,5 +1,7 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Outlet, useLoaderData, useRouteError } from "react-router";
+import { useEffect } from "react";
+import { Outlet, useLoaderData, useNavigation, useRouteError } from "react-router";
+import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
@@ -22,9 +24,20 @@ export default function App() {
         <s-link href="/app/linesheet">Line sheet</s-link>
         <s-link href="/app/warehouse">Warehouse</s-link>
       </s-app-nav>
+      <NavigationLoading />
       <Outlet />
     </AppProvider>
   );
+}
+
+// Shows the admin's loading bar while moving between pages.
+function NavigationLoading() {
+  const shopify = useAppBridge();
+  const { state } = useNavigation();
+  useEffect(() => {
+    shopify.loading(state !== "idle");
+  }, [shopify, state]);
+  return null;
 }
 
 // Shopify needs React Router to catch some thrown responses, so that their headers are included in the response.

@@ -36,5 +36,5 @@ Warehouse credentials are stored AES-256-GCM encrypted. Set `CREDENTIALS_KEY` in
 ## Notes
 
 - Built from Shopify's React Router app template (`TEMPLATE_README.md` covers deployment and the framework).
-- Catalog data is fetched with paged `productVariants` queries (100 per page, up to 20,000 variants). Very large catalogs should move to bulk operations.
+- The catalog is read with a Shopify bulk operation in the background and saved per shop (`CatalogScan`). All pages work from the latest scan, show progress while one runs, and the first scan starts automatically.
 - Prices on the line sheet are shown in USD.

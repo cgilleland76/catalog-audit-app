@@ -1,12 +1,13 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { authenticate } from "../shopify.server";
-import { fetchCatalog } from "../lib/catalog.server";
-import { downloadFile, toCsv } from "../lib/catalog";
+import { catalogForPage } from "../lib/catalog.server";
+import { downloadFile, toCsv, type CatalogRow } from "../lib/catalog";
+import { ScanBanner, ScanProgress, useCatalogScan } from "../components/CatalogScan";
 import {
   groupProducts,
   lineSheetHtml,
@@ -15,9 +16,8 @@ import {
 } from "../lib/linesheet";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
-  const { rows } = await fetchCatalog(admin);
-  return { rows };
+  const { admin, session } = await authenticate.admin(request);
+  return catalogForPage(session.shop, admin);
 };
 
 const ALL = "__all__";
@@ -26,7 +26,37 @@ const uniqueSorted = (values: string[]) =>
   [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
 export default function LineSheetPage() {
-  const { rows } = useLoaderData<typeof loader>();
+  const { rows, scannedAt, scan: initialScan } = useLoaderData<typeof loader>();
+  const { scan, running, rescan } = useCatalogScan(initialScan, scannedAt);
+
+  if (!rows) {
+    return (
+      <s-page heading="Line sheet">
+        <ScanProgress scan={scan} onRetry={rescan} />
+      </s-page>
+    );
+  }
+  return (
+    <LineSheetBuilder
+      rows={rows}
+      banner={<ScanBanner scan={scan} scannedAt={scannedAt} onRetry={rescan} />}
+      running={running}
+      rescan={rescan}
+    />
+  );
+}
+
+function LineSheetBuilder({
+  rows,
+  banner,
+  running,
+  rescan,
+}: {
+  rows: CatalogRow[];
+  banner: ReactNode;
+  running: boolean;
+  rescan: () => void;
+}) {
   const shopify = useAppBridge();
 
   const [vendor, setVendor] = useState(ALL);
@@ -142,6 +172,11 @@ export default function LineSheetPage() {
       <s-button slot="secondary-actions" onClick={exportCsv}>
         Download spreadsheet (CSV)
       </s-button>
+      <s-button slot="secondary-actions" onClick={rescan} disabled={running}>
+        Refresh products
+      </s-button>
+
+      {banner}
 
       <s-section heading="Choose products">
         <s-stack direction="block" gap="base">

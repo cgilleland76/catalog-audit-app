@@ -10,7 +10,8 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
-import { fetchCatalog } from "../lib/catalog.server";
+import { catalogForPage, loadCatalog } from "../lib/catalog.server";
+import { ScanBanner, useCatalogScan } from "../components/CatalogScan";
 import { downloadFile, numericId, toCsv } from "../lib/catalog";
 import {
   PROVIDERS,
@@ -33,9 +34,10 @@ const providerFrom = (request: Request) =>
   Object.keys(PROVIDERS)[0];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const provider = getProvider(providerFrom(request));
   await failStaleComparisons(session.shop);
+  const catalog = await catalogForPage(session.shop, admin);
 
   const credentials = await loadCredentials(session.shop, provider.id);
   const latest = await prisma.wmsComparison.findFirst({
@@ -47,6 +49,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     provider: providerInfo(provider),
     providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, name: p.name })),
     connected: credentials !== null,
+    catalogCount: catalog.rows?.length ?? null,
+    scannedAt: catalog.scannedAt,
+    scan: catalog.scan,
     comparison: latest && {
       id: latest.id,
       status: latest.status,
@@ -61,7 +66,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const provider = getProvider(providerFrom(request));
   const form = await request.formData();
   const intent = form.get("intent");
@@ -98,8 +103,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
     if (running) return { ok: false, message: "A comparison is already running" };
 
-    const { rows } = await fetchCatalog(admin);
-    const live = rows.filter((r) => r.status !== "ARCHIVED");
+    const catalog = await loadCatalog(session.shop);
+    if (!catalog) {
+      return { ok: false, message: "Your catalog is still being read; try again in a minute" };
+    }
+    const live = catalog.rows.filter((r) => r.status !== "ARCHIVED");
     const comparison = await prisma.wmsComparison.create({
       data: { shop: session.shop, provider: provider.id, status: "running" },
     });
@@ -118,7 +126,16 @@ const PAGE_SIZE = 100;
 const CODES = Object.keys(MISMATCH_INFO) as MismatchCode[];
 
 export default function WarehousePage() {
-  const { provider, connected, comparison } = useLoaderData<typeof loader>();
+  const {
+    provider,
+    connected,
+    comparison,
+    catalogCount,
+    scannedAt,
+    scan: initialScan,
+  } = useLoaderData<typeof loader>();
+  const catalogScan = useCatalogScan(initialScan, scannedAt);
+  const catalogReady = catalogCount !== null;
   const fetcher = useFetcher<typeof action>();
   const revalidator = useRevalidator();
   const shopify = useAppBridge();
@@ -186,7 +203,7 @@ export default function WarehousePage() {
         <s-button
           slot="primary-action"
           variant="primary"
-          disabled={running || busy}
+          disabled={running || busy || !catalogReady}
           onClick={() => submit({ intent: "compare" })}
           {...(busy && fetcher.formData?.get("intent") === "compare"
             ? { loading: true }
@@ -199,6 +216,29 @@ export default function WarehousePage() {
         <s-button slot="secondary-actions" onClick={exportCsv}>
           Export (CSV)
         </s-button>
+      )}
+
+      {catalogReady ? (
+        <ScanBanner
+          scan={catalogScan.scan}
+          scannedAt={scannedAt}
+          onRetry={catalogScan.rescan}
+        />
+      ) : catalogScan.scan?.status === "failed" ? (
+        <ScanBanner scan={catalogScan.scan} scannedAt={null} onRetry={catalogScan.rescan} />
+      ) : (
+        <s-banner tone="info">
+          <s-stack direction="inline" gap="base" alignItems="center">
+            <s-spinner accessibilityLabel="Reading your catalog" size="base" />
+            <s-text>
+              Reading your Shopify catalog
+              {catalogScan.scan && catalogScan.scan.objectCount > 0
+                ? ` — ${catalogScan.scan.objectCount.toLocaleString()} variants so far`
+                : ""}
+              . You can run the comparison as soon as it finishes.
+            </s-text>
+          </s-stack>
+        </s-banner>
       )}
 
       {!connected && (
@@ -351,6 +391,23 @@ export default function WarehousePage() {
           </s-stack>
         </s-section>
       )}
+
+      <s-section slot="aside" heading="Shopify catalog">
+        <s-stack direction="block" gap="small">
+          <s-text>
+            {catalogReady
+              ? `${catalogCount.toLocaleString()} variants, read ${new Date(scannedAt ?? "").toLocaleString()}`
+              : "Reading…"}
+          </s-text>
+          <s-button
+            variant="tertiary"
+            disabled={catalogScan.running || running}
+            onClick={catalogScan.rescan}
+          >
+            Refresh catalog
+          </s-button>
+        </s-stack>
+      </s-section>
 
       <s-section slot="aside" heading="How it compares">
         <s-unordered-list>

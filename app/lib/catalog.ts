@@ -22,6 +22,16 @@ export type CatalogRow = {
   inventoryQuantity: number | null;
 };
 
+export type ScanState = {
+  id: string;
+  status: "running" | "done" | "failed";
+  objectCount: number;
+  rowCount: number;
+  error: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+};
+
 export type IssueSeverity = "critical" | "warning" | "info";
 
 export type IssueCode =

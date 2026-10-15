@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useRevalidator } from "react-router";
+import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { authenticate } from "../shopify.server";
-import { fetchCatalog } from "../lib/catalog.server";
+import { catalogForPage } from "../lib/catalog.server";
+import { ScanBanner, ScanProgress, useCatalogScan } from "../components/CatalogScan";
 import {
   ISSUE_INFO,
   auditCatalog,
@@ -12,22 +13,53 @@ import {
   numericId,
   toCsv,
   variantLabel,
+  type CatalogRow,
   type IssueCode,
 } from "../lib/catalog";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
-  const { rows, truncated } = await fetchCatalog(admin);
-  return { rows, truncated, scannedAt: new Date().toISOString() };
+  const { admin, session } = await authenticate.admin(request);
+  return catalogForPage(session.shop, admin);
 };
 
 const PAGE_SIZE = 100;
 const ISSUE_CODES = Object.keys(ISSUE_INFO) as IssueCode[];
 
 export default function AuditPage() {
-  const { rows, truncated, scannedAt } = useLoaderData<typeof loader>();
-  const revalidator = useRevalidator();
+  const { rows, scannedAt, scan: initialScan } = useLoaderData<typeof loader>();
+  const { scan, running, rescan } = useCatalogScan(initialScan, scannedAt);
 
+  if (!rows) {
+    return (
+      <s-page heading="Catalog audit">
+        <ScanProgress scan={scan} onRetry={rescan} />
+      </s-page>
+    );
+  }
+  return (
+    <AuditResults
+      rows={rows}
+      scannedAt={scannedAt ?? ""}
+      banner={<ScanBanner scan={scan} scannedAt={scannedAt} onRetry={rescan} />}
+      running={running}
+      rescan={rescan}
+    />
+  );
+}
+
+function AuditResults({
+  rows,
+  scannedAt,
+  banner,
+  running,
+  rescan,
+}: {
+  rows: CatalogRow[];
+  scannedAt: string;
+  banner: ReactNode;
+  running: boolean;
+  rescan: () => void;
+}) {
   const [minMargin, setMinMargin] = useState(30);
   const [includeDrafts, setIncludeDrafts] = useState(false);
   const [filter, setFilter] = useState<IssueCode | "all">("all");
@@ -128,8 +160,9 @@ export default function AuditPage() {
     <s-page heading="Catalog audit">
       <s-button
         slot="primary-action"
-        onClick={() => revalidator.revalidate()}
-        {...(revalidator.state === "loading" ? { loading: true } : {})}
+        onClick={rescan}
+        disabled={running}
+        {...(running ? { loading: true } : {})}
       >
         Rescan catalog
       </s-button>
@@ -137,11 +170,7 @@ export default function AuditPage() {
         Export issues (CSV)
       </s-button>
 
-      {truncated && (
-        <s-banner tone="warning" heading="Large catalog">
-          Only the first 20,000 variants were scanned.
-        </s-banner>
-      )}
+      {banner}
 
       <s-section heading="Summary">
         <s-stack direction="block" gap="base">
