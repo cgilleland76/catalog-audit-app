@@ -5,7 +5,10 @@ import {
   shopifyApp,
 } from "@shopify/shopify-app-react-router/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
-import prisma from "./db.server";
+import prisma, { databaseReady } from "./db.server";
+
+// Session storage checks for its table as soon as it is created.
+await databaseReady();
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,

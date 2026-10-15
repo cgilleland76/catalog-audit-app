@@ -1,9 +1,11 @@
 import { PrismaClient } from "@prisma/client";
 
+import { migrate } from "./lib/migrations.server";
+
 // Netlify Database provides NETLIFY_DB_URL (older setups used other names).
 // A PgBouncer pooler URL needs pgbouncer mode, each serverless function
 // instance only needs one connection, and DB_SCHEMA keeps the dev app's tables
-// apart from the public app's (see scripts/migrate.mjs).
+// apart from the public app's (see app/lib/migrations.server.ts).
 function databaseUrl() {
   const raw =
     process.env.NETLIFY_DB_URL ||
@@ -21,9 +23,6 @@ function databaseUrl() {
   return url.toString();
 }
 
-// The schema's directUrl is only used by migrations, but Prisma still reads it.
-process.env.NETLIFY_DB_URL_UNPOOLED ||= databaseUrl() ?? "";
-
 const createClient = () => new PrismaClient({ datasourceUrl: databaseUrl() });
 
 declare global {
@@ -40,3 +39,13 @@ if (process.env.NODE_ENV !== "production") {
 const prisma = global.prismaGlobal ?? createClient();
 
 export default prisma;
+
+// Creates or updates the tables once per server instance before first use.
+let migrated: Promise<void> | undefined;
+export function databaseReady() {
+  migrated ??= migrate(prisma).catch((error) => {
+    migrated = undefined; // try again on the next request
+    throw error;
+  });
+  return migrated;
+}

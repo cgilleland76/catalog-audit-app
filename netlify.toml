@@ -1,8 +1,9 @@
 # Netlify builds SKU Doctor from GitHub: `main` is the public app, the `dev`
 # branch deploys the dev app to dev--<site>.netlify.app.
 [build]
-  # Applies database migrations to this environment's schema, then builds.
-  command = "npx prisma generate && node scripts/migrate.mjs && npm run build"
+  # The database is only available to the running app, which creates its own
+  # tables on first start (app/lib/migrations.server.ts).
+  command = "npx prisma generate && npm run build"
   publish = "build/client"
 
 [build.environment]

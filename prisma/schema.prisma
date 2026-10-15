@@ -10,13 +10,12 @@ generator client {
 // Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
 // enough when changing adapters.
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
-// Netlify Database (built-in Postgres). Netlify provides NETLIFY_DB_URL;
-// app/db.server.ts and scripts/migrate.mjs fill in both values from it (or
-// from a separate unpooled URL when one exists).
+// Netlify Database (built-in Postgres), provided to the running app as
+// NETLIFY_DB_URL (see app/db.server.ts). Tables are created by the app itself
+// from app/lib/migrations.server.ts; keep that in step with this file.
 datasource db {
-  provider  = "postgresql"
-  url       = env("NETLIFY_DB_URL")
-  directUrl = env("NETLIFY_DB_URL_UNPOOLED")
+  provider = "postgresql"
+  url      = env("NETLIFY_DB_URL")
 }
 
 model Session {
