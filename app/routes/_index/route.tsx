@@ -23,6 +23,7 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
+        <img className={styles.logo} src="/logo.svg" alt="" width={96} height={96} />
         <h1 className={styles.heading}>SKU Doctor</h1>
         <p className={styles.text}>
           Find and fix catalog problems before they cost you money, and build

@@ -19,6 +19,11 @@
   text-align: center;
 }
 
+.logo {
+  justify-self: center;
+  margin-bottom: -0.5rem;
+}
+
 .heading {
   margin: 0;
   font-size: 2.5rem;
