@@ -20,6 +20,7 @@ export default function App() {
       <s-app-nav>
         <s-link href="/app">Catalog audit</s-link>
         <s-link href="/app/linesheet">Line sheet</s-link>
+        <s-link href="/app/warehouse">Warehouse</s-link>
       </s-app-nav>
       <Outlet />
     </AppProvider>
