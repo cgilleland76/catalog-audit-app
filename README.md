@@ -1,4 +1,6 @@
-# Catalog Audit & Line Sheet
+# SKU Doctor
+
+Catalog audit and wholesale line sheets for Shopify.
 
 An embedded Shopify app with two tools:
 

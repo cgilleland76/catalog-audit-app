@@ -1,5 +1,5 @@
 {
-  "name": "catalog-audit-app",
+  "name": "sku-doctor",
   "private": true,
   "scripts": {
     "build": "react-router build",
