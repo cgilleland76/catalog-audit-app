@@ -1,16 +1,16 @@
 // Finds the database connection strings in whatever variables the host
-// provides. Netlify DB (Neon) uses NETLIFY_DATABASE_URL[_UNPOOLED]; the
-// fallbacks cover other Netlify database setups and plain Postgres hosts.
+// provides. Netlify Database uses NETLIFY_DB_URL; the fallbacks cover the
+// older Netlify DB extension and plain Postgres hosts.
 const POOLED = [
-  "NETLIFY_DATABASE_URL",
   "NETLIFY_DB_URL",
+  "NETLIFY_DATABASE_URL",
   "DATABASE_URL",
   "POSTGRES_URL",
   "NEON_DATABASE_URL",
 ];
 const DIRECT = [
-  "NETLIFY_DATABASE_URL_UNPOOLED",
   "NETLIFY_DB_URL_UNPOOLED",
+  "NETLIFY_DATABASE_URL_UNPOOLED",
   "DATABASE_URL_UNPOOLED",
   "POSTGRES_URL_NON_POOLING",
   "DIRECT_URL",

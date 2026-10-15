@@ -28,7 +28,7 @@ execSync("npx prisma migrate deploy", {
   stdio: "inherit",
   env: {
     ...process.env,
-    NETLIFY_DATABASE_URL: withSchema(urls.pooled[1]),
-    NETLIFY_DATABASE_URL_UNPOOLED: withSchema(urls.direct[1]),
+    NETLIFY_DB_URL: withSchema(urls.pooled[1]),
+    NETLIFY_DB_URL_UNPOOLED: withSchema(urls.direct[1]),
   },
 });

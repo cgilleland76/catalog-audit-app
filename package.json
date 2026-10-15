@@ -24,7 +24,6 @@
     "node": ">=22.12"
   },
   "dependencies": {
-    "@netlify/neon": "^0.1.2",
     "@prisma/client": "^6.19.0",
     "@react-router/dev": "7.18.2",
     "@react-router/fs-routes": "7.18.2",

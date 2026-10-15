@@ -10,12 +10,13 @@ generator client {
 // Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
 // enough when changing adapters.
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
-// Netlify DB (Neon Postgres). Netlify sets both variables automatically:
-// the pooled URL is used by the app, the unpooled one runs migrations.
+// Netlify Database (built-in Postgres). Netlify provides NETLIFY_DB_URL;
+// app/db.server.ts and scripts/migrate.mjs fill in both values from it (or
+// from a separate unpooled URL when one exists).
 datasource db {
   provider  = "postgresql"
-  url       = env("NETLIFY_DATABASE_URL")
-  directUrl = env("NETLIFY_DATABASE_URL_UNPOOLED")
+  url       = env("NETLIFY_DB_URL")
+  directUrl = env("NETLIFY_DB_URL_UNPOOLED")
 }
 
 model Session {
