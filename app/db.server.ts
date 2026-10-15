@@ -4,7 +4,12 @@ import { PrismaClient } from "@prisma/client";
 // instance only needs one connection. DB_SCHEMA keeps the dev app's tables
 // apart from the public app's (see scripts/migrate.mjs).
 function databaseUrl() {
-  const raw = process.env.NETLIFY_DATABASE_URL;
+  const raw =
+    process.env.NETLIFY_DATABASE_URL ||
+    process.env.NETLIFY_DB_URL ||
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.NEON_DATABASE_URL;
   if (!raw) return undefined;
   const url = new URL(raw);
   if (url.hostname.includes("-pooler")) url.searchParams.set("pgbouncer", "true");
