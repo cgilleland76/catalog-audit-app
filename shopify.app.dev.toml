@@ -5,7 +5,7 @@
 
 client_id = "8b3c6f9b87ff02a22cdb1fadbd748be0"
 name = "SKU Doctor Dev"
-application_url = "https://dev--YOUR-SITE.netlify.app"
+application_url = "https://dev--sku-doctor.netlify.app"
 embedded = true
 
 [access_scopes]
@@ -24,7 +24,7 @@ api_version = "2027-01"
   topics = [ "app/scopes_update" ]
 
 [auth]
-redirect_urls = [ "https://dev--YOUR-SITE.netlify.app/auth/callback" ]
+redirect_urls = [ "https://dev--sku-doctor.netlify.app/auth/callback" ]
 
 [build]
 include_config_on_deploy = true
