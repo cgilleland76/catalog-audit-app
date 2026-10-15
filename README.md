@@ -18,13 +18,13 @@ The app is read-only: it requests `read_products` and `read_inventory` and never
 
 ## Hosting
 
-Runs on **Netlify** (Functions) with a **Supabase** Postgres database.
+Runs on **Netlify** (Functions) with **Netlify DB** (Neon Postgres).
 
+- The `@netlify/neon` dependency tells Netlify to provision the database, which sets `NETLIFY_DATABASE_URL` (pooled, used by the app) and `NETLIFY_DATABASE_URL_UNPOOLED` (used by migrations). Claim the database into a Neon account from the Netlify dashboard so it isn't removed.
 - `netlify.toml` builds the app, runs `prisma migrate deploy`, and bundles Prisma's Linux engine.
 - Netlify Functions stop after a few seconds, so long work advances in steps while a page is open: catalog scans finish when a page checks on them, and ShipHero comparisons look up the next SKUs on each step (`advanceComparison`).
-- All tables have row level security enabled with no policies, so Supabase's Data API can't read them; the app connects as the database owner.
 
-Netlify environment variables: `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL` (the Netlify site URL), `SCOPES` (`read_products,read_inventory`), `DATABASE_URL`, `DIRECT_URL`, `CREDENTIALS_KEY`. See `.env.example` for the connection string formats.
+Netlify environment variables to set yourself: `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL` (the Netlify site URL), `SCOPES` (`read_products,read_inventory`), `CREDENTIALS_KEY`.
 
 ## Run it locally
 

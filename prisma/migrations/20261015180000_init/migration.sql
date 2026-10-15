@@ -81,9 +81,9 @@ CREATE INDEX "WmsComparison_shop_provider_startedAt_idx" ON "WmsComparison"("sho
 CREATE INDEX "CatalogScan_shop_startedAt_idx" ON "CatalogScan"("shop", "startedAt");
 
 
--- Supabase exposes the public schema through its Data API. SKU Doctor only
--- connects as the database owner, so lock these tables to the API entirely:
--- row level security with no policies denies the anon and authenticated roles.
+-- SKU Doctor only connects as the database owner. Row level security with no
+-- policies keeps any other role (e.g. a database Data API, if one is ever
+-- enabled) from reading sessions or warehouse credentials.
 ALTER TABLE "Session" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "WmsConnection" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "WmsComparison" ENABLE ROW LEVEL SECURITY;

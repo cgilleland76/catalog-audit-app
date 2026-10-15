@@ -10,12 +10,12 @@ generator client {
 // Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
 // enough when changing adapters.
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
-// Supabase Postgres. DATABASE_URL is the pooled connection (port 6543,
-// ?pgbouncer=true) used by the app; DIRECT_URL (port 5432) runs migrations.
+// Netlify DB (Neon Postgres). Netlify sets both variables automatically:
+// the pooled URL is used by the app, the unpooled one runs migrations.
 datasource db {
   provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  url       = env("NETLIFY_DATABASE_URL")
+  directUrl = env("NETLIFY_DATABASE_URL_UNPOOLED")
 }
 
 model Session {
