@@ -18,7 +18,7 @@ The app is read-only: it requests `read_products` and `read_inventory` and never
 
 ## Hosting
 
-Runs on **Netlify** (Functions) with **Netlify Database** (built-in Postgres), created from the project's Database page. Netlify provides the connection string as `NETLIFY_DB_URL`; `scripts/db-url.mjs` also accepts the older `NETLIFY_DATABASE_URL` names.
+Runs on **Netlify** (Functions) with **Netlify Database** (built-in Postgres), created from the project's Database page. Netlify provides the connection string as `NETLIFY_DB_URL`; `app/db.server.ts` also accepts the older `NETLIFY_DATABASE_URL` name.
 - Netlify only gives the running app the database address, not the build, so the app creates and updates its own tables on its first request in each instance (`app/lib/migrations.server.ts`, guarded by an advisory lock). `netlify.toml` builds the app and bundles Prisma's Linux engine.
 - Netlify Functions stop after a few seconds, so long work advances in steps while a page is open: catalog scans finish when a page checks on them, and ShipHero comparisons look up the next SKUs on each step (`advanceComparison`).
 
