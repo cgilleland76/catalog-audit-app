@@ -26,6 +26,19 @@ Runs on **Netlify** (Functions) with **Netlify DB** (Neon Postgres).
 
 Netlify environment variables to set yourself: `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL` (the Netlify site URL), `SCOPES` (`read_products,read_inventory`), `CREDENTIALS_KEY`.
 
+## Dev and public apps
+
+| | Dev | Public |
+|---|---|---|
+| Shopify app | SKU Doctor Dev (`shopify.app.dev.toml`) | SKU Doctor (`shopify.app.toml`) |
+| Branch | `dev` | `main` |
+| Netlify | `https://dev--<site>.netlify.app` (branch deploy) | `https://<site>.netlify.app` |
+| Database | `dev` schema of Netlify DB (`DB_SCHEMA=dev`) | `public` schema |
+
+Netlify uses each app's own keys: set `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET` and `SHOPIFY_APP_URL` with a different value for the `dev` branch (Environment variables → "Branch deploys" / specific branch) than for production.
+
+**Releasing a change:** commit to `dev`, check it in SKU Doctor Dev, then merge `dev` into `main`. If a change touches the app config (scopes, URLs, webhooks), also run `npm run deploy -- --config dev` for dev and `npm run deploy` for public.
+
 ## Run it locally
 
 Requires Node 22.12+, a Shopify Partner / developer account, and a `.env` file (copy `.env.example`).

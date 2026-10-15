@@ -1,10 +1,11 @@
-# This file stores configurations for your Shopify app.
+# SKU Doctor: the public app, served from `main` on Netlify.
+# Push changes with: npm run deploy
 
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "8b3c6f9b87ff02a22cdb1fadbd748be0"
+client_id = ""
 name = "SKU Doctor"
-application_url = "https://shopify.dev/apps/default-app-home"
+application_url = "https://YOUR-SITE.netlify.app"
 embedded = true
 
 [access_scopes]
@@ -23,7 +24,7 @@ api_version = "2027-01"
   topics = [ "app/scopes_update" ]
 
 [auth]
-redirect_urls = [ "https://shopify.dev/apps/default-app-home/api/auth" ]
+redirect_urls = [ "https://YOUR-SITE.netlify.app/auth/callback" ]
 
 [build]
 include_config_on_deploy = true

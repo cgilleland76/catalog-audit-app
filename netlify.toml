@@ -1,11 +1,16 @@
-# Netlify builds SKU Doctor from GitHub on every push to main.
+# Netlify builds SKU Doctor from GitHub: `main` is the public app, the `dev`
+# branch deploys the dev app to dev--<site>.netlify.app.
 [build]
-  # Applies database migrations (DIRECT_URL) before building the app.
-  command = "npx prisma generate && npx prisma migrate deploy && npm run build"
+  # Applies database migrations to this environment's schema, then builds.
+  command = "npx prisma generate && node scripts/migrate.mjs && npm run build"
   publish = "build/client"
 
 [build.environment]
   NODE_VERSION = "22"
+
+# The dev app keeps its data in its own schema of the same database.
+[context.dev.environment]
+  DB_SCHEMA = "dev"
 
 [functions]
   # Prisma loads its query engine and schema from disk at runtime.

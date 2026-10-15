@@ -1,0 +1,31 @@
+# SKU Doctor Dev: the test app, installed on the dev store and served from the
+# `dev` branch on Netlify. Push changes with: npm run deploy -- --config dev
+
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "8b3c6f9b87ff02a22cdb1fadbd748be0"
+name = "SKU Doctor Dev"
+application_url = "https://dev--YOUR-SITE.netlify.app"
+embedded = true
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_products,read_inventory"
+
+[webhooks]
+api_version = "2027-01"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+[auth]
+redirect_urls = [ "https://dev--YOUR-SITE.netlify.app/auth/callback" ]
+
+[build]
+include_config_on_deploy = true
+automatically_update_urls_on_dev = true
