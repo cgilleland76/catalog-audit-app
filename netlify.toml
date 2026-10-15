@@ -1,5 +1,6 @@
-# Netlify builds SKU Doctor from GitHub: `main` is the public app, the `dev`
-# branch deploys the dev app to dev--<site>.netlify.app.
+# Two Netlify sites build this repo, each with its own Netlify Database:
+#   sku-doctor      ← main  (public app)
+#   sku-doctor-dev  ← dev   (dev app)
 [build]
   # The database is only available to the running app, which creates its own
   # tables on first start (app/lib/migrations.server.ts).
@@ -8,10 +9,6 @@
 
 [build.environment]
   NODE_VERSION = "22"
-
-# The dev app keeps its data in its own schema of the same database.
-[context.dev.environment]
-  DB_SCHEMA = "dev"
 
 [functions]
   # Prisma loads its query engine and schema from disk at runtime.

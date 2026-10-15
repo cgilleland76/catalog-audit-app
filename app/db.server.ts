@@ -30,8 +30,8 @@ function createClient() {
   const url = databaseUrl();
   if (!url) {
     throw new Error(
-      "No database connection string. Netlify provides NETLIFY_DB_URL to production; " +
-        "for branch deploys set DATABASE_URL to the database's connection string.",
+      "No database connection string. Netlify provides NETLIFY_DB_URL to a site's " +
+        "production deploys once the site has a database (project → Database).",
     );
   }
   // prisma/schema.prisma names NETLIFY_DB_URL; keep it set for Prisma's checks.
