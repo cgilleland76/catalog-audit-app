@@ -4,6 +4,7 @@ import type { CatalogRow } from "../catalog";
 import { shiphero } from "./shiphero.server";
 import type {
   Mismatch,
+  WmsProduct,
   WmsCredentials,
   WmsProvider,
   WmsProviderInfo,
@@ -62,7 +63,7 @@ const cents = (n: number) => Math.round(n * 100);
 
 export function compareRows(
   rows: CatalogRow[],
-  found: Map<string, import("./types").WmsProduct>,
+  found: Map<string, WmsProduct>,
   wmsName: string,
 ): Mismatch[] {
   const out: Mismatch[] = [];
@@ -107,64 +108,110 @@ export function compareRows(
   return out;
 }
 
-// Comparisons running in this server process.
-const active = new Set<string>();
-
-// Runs after the request has returned; progress and results go to the
-// WmsComparison row, which the page polls.
-export function startComparison(
-  comparisonId: string,
+/** Creates a comparison for every SKU in the catalog; steps do the work. */
+export async function createComparison(
+  shop: string,
   provider: WmsProvider,
-  credentials: WmsCredentials,
   rows: CatalogRow[],
 ) {
   const skus = [
     ...new Set(rows.map((r) => r.sku?.trim()).filter((s): s is string => !!s)),
   ];
-
-  active.add(comparisonId);
-  void (async () => {
-    try {
-      let lastWrite = 0;
-      const found = await provider.fetchBySku(credentials, skus, async (checked) => {
-        if (Date.now() - lastWrite < 2000 && checked < skus.length) return;
-        lastWrite = Date.now();
-        await prisma.wmsComparison.update({
-          where: { id: comparisonId },
-          data: { checked },
-        });
-      });
-      const mismatches = compareRows(rows, found, provider.name);
-      await prisma.wmsComparison.update({
-        where: { id: comparisonId },
-        data: {
-          status: "done",
-          checked: skus.length,
-          results: JSON.stringify(mismatches),
-          finishedAt: new Date(),
-        },
-      });
-    } catch (error) {
-      await prisma.wmsComparison.update({
-        where: { id: comparisonId },
-        data: {
-          status: "failed",
-          error: error instanceof Error ? error.message : String(error),
-          finishedAt: new Date(),
-        },
-      });
-    } finally {
-      active.delete(comparisonId);
-    }
-  })();
-
-  return skus.length;
+  return prisma.wmsComparison.create({
+    data: {
+      shop,
+      provider: provider.id,
+      status: "running",
+      skus: JSON.stringify(skus),
+      found: "{}",
+      total: skus.length,
+    },
+  });
 }
 
-// A comparison left "running" by a server restart will never finish.
-export async function failStaleComparisons(shop: string) {
-  await prisma.wmsComparison.updateMany({
-    where: { shop, status: "running", id: { notIn: [...active] } },
-    data: { status: "failed", error: "Interrupted by a server restart", finishedAt: new Date() },
+// Each step must finish well inside the serverless request limit.
+const STEP_MS = 6000;
+const LOCK_MS = 15000;
+
+/**
+ * Looks up the next SKUs for a running comparison and saves progress. When
+ * every SKU is checked, compares against the latest catalog and finishes.
+ * Safe to call from overlapping requests: only one step runs at a time.
+ */
+export async function advanceComparison(
+  comparisonId: string,
+  loadRows: () => Promise<CatalogRow[] | null>,
+) {
+  const now = new Date();
+  const claimed = await prisma.wmsComparison.updateMany({
+    where: {
+      id: comparisonId,
+      status: "running",
+      OR: [{ lockedUntil: null }, { lockedUntil: { lt: now } }],
+    },
+    data: { lockedUntil: new Date(now.getTime() + LOCK_MS) },
   });
+  if (claimed.count === 0) return;
+
+  const comparison = await prisma.wmsComparison.findUniqueOrThrow({
+    where: { id: comparisonId },
+  });
+  const finish = (data: Parameters<typeof prisma.wmsComparison.update>[0]["data"]) =>
+    prisma.wmsComparison.update({
+      where: { id: comparisonId },
+      data: { ...data, lockedUntil: null },
+    });
+
+  try {
+    const provider = getProvider(comparison.provider);
+    const credentials = await loadCredentials(comparison.shop, comparison.provider);
+    if (!credentials) {
+      await finish({ status: "failed", error: `${provider.name} is disconnected`, finishedAt: new Date() });
+      return;
+    }
+
+    const skus = JSON.parse(comparison.skus ?? "[]") as string[];
+    const found = JSON.parse(comparison.found ?? "{}") as Record<string, WmsProduct>;
+    let checked = comparison.checked;
+
+    if (checked < skus.length) {
+      const result = await provider.lookup(
+        credentials,
+        skus.slice(checked),
+        Date.now() + STEP_MS,
+      );
+      for (const p of result.found) found[p.sku.trim().toLowerCase()] = p;
+      checked += result.processed;
+    }
+
+    if (checked < skus.length) {
+      await finish({ checked, found: JSON.stringify(found) });
+      return;
+    }
+
+    const rows = await loadRows();
+    if (!rows) {
+      await finish({ status: "failed", error: "No catalog scan to compare against", finishedAt: new Date() });
+      return;
+    }
+    const mismatches = compareRows(
+      rows.filter((r) => r.status !== "ARCHIVED"),
+      new Map(Object.entries(found)),
+      provider.name,
+    );
+    await finish({
+      status: "done",
+      checked,
+      skus: null,
+      found: null,
+      results: JSON.stringify(mismatches),
+      finishedAt: new Date(),
+    });
+  } catch (error) {
+    await finish({
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+      finishedAt: new Date(),
+    });
+  }
 }

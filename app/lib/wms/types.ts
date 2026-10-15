@@ -30,14 +30,16 @@ export interface WmsProvider extends WmsProviderInfo {
   /** Throws with a readable message if the credentials don't work. */
   testConnection(credentials: WmsCredentials): Promise<void>;
   /**
-   * Looks up the given SKUs. Returns only the SKUs the WMS knows, keyed by
-   * lower-cased SKU. `onProgress` reports how many SKUs have been checked.
+   * Looks up SKUs from the front of the list until `deadline` (a Date.now()
+   * timestamp) is near, so one call fits in a serverless request. Returns the
+   * products found and how many SKUs were processed; the caller continues
+   * from there on the next step.
    */
-  fetchBySku(
+  lookup(
     credentials: WmsCredentials,
     skus: string[],
-    onProgress: (checked: number) => Promise<void> | void,
-  ): Promise<Map<string, WmsProduct>>;
+    deadline: number,
+  ): Promise<{ found: WmsProduct[]; processed: number }>;
 }
 
 export type MismatchCode =

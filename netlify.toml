@@ -1,0 +1,15 @@
+# Netlify builds SKU Doctor from GitHub on every push to main.
+[build]
+  # Applies database migrations (DIRECT_URL) before building the app.
+  command = "npx prisma generate && npx prisma migrate deploy && npm run build"
+  publish = "build/client"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[functions]
+  # Prisma loads its query engine and schema from disk at runtime.
+  included_files = [
+    "node_modules/.prisma/client/libquery_engine-rhel-openssl-3.0.x.so.node",
+    "node_modules/.prisma/client/schema.prisma",
+  ]

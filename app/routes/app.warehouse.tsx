@@ -4,7 +4,7 @@ import type {
   HeadersFunction,
   LoaderFunctionArgs,
 } from "react-router";
-import { useFetcher, useLoaderData, useRevalidator } from "react-router";
+import { useFetcher, useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
@@ -16,12 +16,12 @@ import { downloadFile, numericId, toCsv } from "../lib/catalog";
 import {
   PROVIDERS,
   deleteCredentials,
-  failStaleComparisons,
   getProvider,
   loadCredentials,
   providerInfo,
   saveCredentials,
-  startComparison,
+  advanceComparison,
+  createComparison,
 } from "../lib/wms/index.server";
 import {
   MISMATCH_INFO,
@@ -36,7 +36,6 @@ const providerFrom = (request: Request) =>
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const provider = getProvider(providerFrom(request));
-  await failStaleComparisons(session.shop);
   const catalog = await catalogForPage(session.shop, admin);
 
   const credentials = await loadCredentials(session.shop, provider.id);
@@ -108,15 +107,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { ok: false, message: "Your catalog is still being read; try again in a minute" };
     }
     const live = catalog.rows.filter((r) => r.status !== "ARCHIVED");
-    const comparison = await prisma.wmsComparison.create({
-      data: { shop: session.shop, provider: provider.id, status: "running" },
+    const comparison = await createComparison(session.shop, provider, live);
+    return {
+      ok: true,
+      message: `Checking ${comparison.total} SKUs in ${provider.name}`,
+    };
+  }
+
+  // Runs the next few seconds of a comparison; the page calls this while it
+  // polls, so a comparison only advances while the page is open.
+  if (intent === "step") {
+    const running = await prisma.wmsComparison.findFirst({
+      where: { shop: session.shop, provider: provider.id, status: "running" },
     });
-    const total = startComparison(comparison.id, provider, credentials, live);
-    await prisma.wmsComparison.update({
-      where: { id: comparison.id },
-      data: { total },
-    });
-    return { ok: true, message: `Checking ${total} SKUs in ${provider.name}` };
+    if (running) {
+      await advanceComparison(running.id, async () =>
+        (await loadCatalog(session.shop))?.rows ?? null,
+      );
+    }
+    return { ok: true, message: "" };
   }
 
   return { ok: false, message: "Unknown action" };
@@ -137,7 +146,7 @@ export default function WarehousePage() {
   const catalogScan = useCatalogScan(initialScan, scannedAt);
   const catalogReady = catalogCount !== null;
   const fetcher = useFetcher<typeof action>();
-  const revalidator = useRevalidator();
+  const stepper = useFetcher<typeof action>();
   const shopify = useAppBridge();
 
   const [credentials, setCredentials] = useState<Record<string, string>>({});
@@ -152,14 +161,19 @@ export default function WarehousePage() {
     shopify.toast.show(fetcher.data.message, { isError: !fetcher.data.ok });
   }, [fetcher.data, shopify]);
 
-  // Poll while a comparison runs.
+  // While a comparison runs, keep asking the server to do the next step.
+  // Each finished step re-runs the loader, which shows the new progress.
   useEffect(() => {
     if (!running) return;
-    const timer = setInterval(() => {
-      if (revalidator.state === "idle") revalidator.revalidate();
-    }, 3000);
+    const tick = () => {
+      if (stepper.state === "idle") {
+        stepper.submit({ intent: "step" }, { method: "POST" });
+      }
+    };
+    tick();
+    const timer = setInterval(tick, 2000);
     return () => clearInterval(timer);
-  }, [running, revalidator]);
+  }, [running, stepper]);
 
   const results = useMemo(() => comparison?.results ?? [], [comparison]);
   const counts = useMemo(() => {
@@ -287,8 +301,9 @@ export default function WarehousePage() {
             <s-spinner accessibilityLabel="Comparing" />
             <s-text>
               Checked {comparison.checked.toLocaleString()} of{" "}
-              {comparison.total.toLocaleString()} SKUs in {provider.name}. You
-              can leave this page; the comparison keeps running.
+              {comparison.total.toLocaleString()} SKUs in {provider.name}.
+              Keep this page open; the comparison pauses while it&apos;s
+              closed and picks up where it left off when you return.
             </s-text>
           </s-stack>
         </s-section>

@@ -1,7 +1,6 @@
 import type { AdminApiContext } from "@shopify/shopify-app-react-router/server";
 
 import prisma from "../db.server";
-import { unauthenticated } from "../shopify.server";
 import type { CatalogRow, ScanState } from "./catalog";
 
 // The catalog is read with a bulk operation: Shopify exports every variant to
@@ -161,8 +160,9 @@ const fail = (id: string, error: string) =>
     data: { status: "failed", error, finishedAt: new Date() },
   });
 
-// Scans whose status is being checked right now, so two callers don't
-// download the same file twice.
+// Scans whose status is being checked right now in this instance, so two
+// callers don't download the same file twice. Scans advance only when a page
+// checks on them (serverless functions can't keep working in the background).
 const checking = new Set<string>();
 
 /** Checks a running scan's bulk operation and saves the rows once it's done. */
@@ -227,23 +227,6 @@ async function refresh(scanId: string, admin: AdminApiContext) {
   }
 }
 
-// Follows a scan in the background so it finishes even if nobody is watching.
-function follow(shop: string, scanId: string) {
-  void (async () => {
-    for (let i = 0; i < 400; i++) {
-      await new Promise((r) => setTimeout(r, 3000));
-      try {
-        const { admin } = await unauthenticated.admin(shop);
-        await refresh(scanId, admin);
-      } catch {
-        // Try again on the next tick; the page's status checks also finish scans.
-      }
-      const scan = await prisma.catalogScan.findUnique({ where: { id: scanId } });
-      if (!scan || scan.status !== "running") return;
-    }
-  })();
-}
-
 export async function startScan(shop: string, admin: AdminApiContext) {
   const running = await prisma.catalogScan.findFirst({
     where: { shop, status: "running" },
@@ -274,7 +257,6 @@ export async function startScan(shop: string, admin: AdminApiContext) {
           finishedAt: new Date(),
         },
   });
-  if (scan.status === "running") follow(shop, scan.id);
   return toState(scan);
 }
 

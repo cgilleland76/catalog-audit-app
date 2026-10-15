@@ -28,6 +28,21 @@ type GqlError = { message?: string; code?: number; time_remaining?: string };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Thrown when waiting for ShipHero (credits, retries) would run past the
+// step's deadline; the lookup stops and the next step continues.
+class OutOfTime extends Error {}
+
+async function waitOrStop(ms: number, deadline: number) {
+  if (Date.now() + ms > deadline) throw new OutOfTime();
+  await sleep(ms);
+}
+
+// Longest a connection test may wait on ShipHero.
+const STEP_TEST_MS = 6000;
+
+// Time to leave for one more request before the deadline.
+const REQUEST_MS = 2500;
+
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 async function accessToken(refreshToken: string): Promise<string> {
@@ -72,6 +87,7 @@ function creditWaitMs(errors: GqlError[]): number | null {
 async function query<T>(
   credentials: WmsCredentials,
   body: string,
+  deadline = Infinity,
 ): Promise<T> {
   for (let attempt = 0; attempt < 8; attempt++) {
     const token = await accessToken(credentials.refreshToken);
@@ -88,14 +104,14 @@ async function query<T>(
       continue;
     }
     if (res.status === 429 || res.status >= 500) {
-      await sleep(2000 * (attempt + 1));
+      await waitOrStop(2000 * (attempt + 1), deadline);
       continue;
     }
     const json = (await res.json()) as { data?: T; errors?: GqlError[] };
     if (json.errors?.length) {
       const wait = creditWaitMs(json.errors);
       if (wait !== null) {
-        await sleep(wait);
+        await waitOrStop(wait, deadline);
         continue;
       }
       throw new Error(
@@ -201,26 +217,43 @@ export const shiphero: WmsProvider = {
 
   async testConnection(credentials) {
     if (!credentials.refreshToken) throw new Error("Enter a refresh token");
-    await query(credentials, lookupQuery(["__sku_doctor_connection_test__"], credentials.customerAccountId));
+    try {
+      await query(
+        credentials,
+        lookupQuery(["__sku_doctor_connection_test__"], credentials.customerAccountId),
+        Date.now() + STEP_TEST_MS,
+      );
+    } catch (error) {
+      if (error instanceof OutOfTime) {
+        throw new Error("ShipHero is rate-limiting requests; try again in a minute");
+      }
+      throw error;
+    }
   },
 
-  async fetchBySku(credentials, skus, onProgress) {
-    const found = new Map<string, WmsProduct>();
-    for (let i = 0; i < skus.length; i += BATCH) {
-      const batch = skus.slice(i, i + BATCH);
-      const data = await query<LookupResult>(
-        credentials,
-        lookupQuery(batch, credentials.customerAccountId),
-      );
-      batch.forEach((sku, j) => {
-        const node = data[`s${j}`]?.data?.edges?.[0]?.node;
-        // products(sku:) can match loosely; only accept the exact SKU.
-        if (node && node.sku?.trim().toLowerCase() === sku.trim().toLowerCase()) {
-          found.set(sku.trim().toLowerCase(), normalize(node));
-        }
-      });
-      await onProgress(Math.min(i + BATCH, skus.length));
+  async lookup(credentials, skus, deadline) {
+    const found: WmsProduct[] = [];
+    let processed = 0;
+    try {
+      while (processed < skus.length && Date.now() + REQUEST_MS < deadline) {
+        const batch = skus.slice(processed, processed + BATCH);
+        const data = await query<LookupResult>(
+          credentials,
+          lookupQuery(batch, credentials.customerAccountId),
+          deadline,
+        );
+        batch.forEach((sku, j) => {
+          const node = data[`s${j}`]?.data?.edges?.[0]?.node;
+          // products(sku:) can match loosely; only accept the exact SKU.
+          if (node && node.sku?.trim().toLowerCase() === sku.trim().toLowerCase()) {
+            found.push(normalize(node));
+          }
+        });
+        processed += batch.length;
+      }
+    } catch (error) {
+      if (!(error instanceof OutOfTime)) throw error;
     }
-    return found;
+    return { found, processed };
   },
 };

@@ -3,14 +3,19 @@
 
 generator client {
   provider = "prisma-client-js"
+  // "native" for your computer, rhel-openssl-3.0.x for Netlify Functions.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 // Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
 // enough when changing adapters.
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+// Supabase Postgres. DATABASE_URL is the pooled connection (port 6543,
+// ?pgbouncer=true) used by the app; DIRECT_URL (port 5432) runs migrations.
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model Session {
@@ -46,18 +51,23 @@ model WmsConnection {
   @@unique([shop, provider])
 }
 
-// One Shopify-vs-WMS comparison. Runs in the background; the page polls it.
+// One Shopify-vs-WMS comparison. Serverless requests can only run for a few
+// seconds, so it advances in steps: each step looks up the next SKUs and saves
+// progress here. Pages call a step while they poll.
 model WmsComparison {
-  id         String    @id @default(cuid())
-  shop       String
-  provider   String
-  status     String // running | done | failed
-  checked    Int       @default(0)
-  total      Int       @default(0)
-  error      String?
-  results    String? // JSON array of mismatches
-  startedAt  DateTime  @default(now())
-  finishedAt DateTime?
+  id          String    @id @default(cuid())
+  shop        String
+  provider    String
+  status      String // running | done | failed
+  skus        String? // JSON array of SKUs to look up
+  found       String? // JSON object: lower-cased SKU -> WmsProduct
+  checked     Int       @default(0)
+  total       Int       @default(0)
+  error       String?
+  results     String? // JSON array of mismatches
+  lockedUntil DateTime? // a step is running until this time
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
 
   @@index([shop, provider, startedAt])
 }

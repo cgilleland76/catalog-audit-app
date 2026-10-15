@@ -16,13 +16,23 @@ An embedded Shopify app with two tools:
 
 The app is read-only: it requests `read_products` and `read_inventory` and never changes your catalog.
 
-## Run it on your store
+## Hosting
 
-Requires Node 22.12+ and a Shopify Partner / developer account.
+Runs on **Netlify** (Functions) with a **Supabase** Postgres database.
+
+- `netlify.toml` builds the app, runs `prisma migrate deploy`, and bundles Prisma's Linux engine.
+- Netlify Functions stop after a few seconds, so long work advances in steps while a page is open: catalog scans finish when a page checks on them, and ShipHero comparisons look up the next SKUs on each step (`advanceComparison`).
+- All tables have row level security enabled with no policies, so Supabase's Data API can't read them; the app connects as the database owner.
+
+Netlify environment variables: `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL` (the Netlify site URL), `SCOPES` (`read_products,read_inventory`), `DATABASE_URL`, `DIRECT_URL`, `CREDENTIALS_KEY`. See `.env.example` for the connection string formats.
+
+## Run it locally
+
+Requires Node 22.12+, a Shopify Partner / developer account, and a `.env` file (copy `.env.example`).
 
 ```sh
 npm install
-npm run dev        # signs in, creates/links the app, opens a tunnel
+npm run dev        # signs in, links the app, opens a tunnel
 ```
 
 Press `p` in the dev console to open the app in your store and approve the install.
@@ -31,7 +41,7 @@ Press `p` in the dev console to open the app in your store and approve the insta
 
 Write a connector in `app/lib/wms/` that implements `WmsProvider` (`types.ts`) — credential fields, a connection test, and a SKU lookup returning weight in pounds and cost — then register it in `PROVIDERS` in `app/lib/wms/index.server.ts`. `shiphero.server.ts` is the reference.
 
-Warehouse credentials are stored AES-256-GCM encrypted. Set `CREDENTIALS_KEY` in production; locally the key is derived from the app's API secret.
+Warehouse credentials are stored AES-256-GCM encrypted. Set `CREDENTIALS_KEY` to the same value everywhere (Netlify and your `.env`); without it the key is derived from the app's API secret.
 
 ## Notes
 
