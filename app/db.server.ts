@@ -23,7 +23,18 @@ function databaseUrl() {
   return url.toString();
 }
 
-const createClient = () => new PrismaClient({ datasourceUrl: databaseUrl() });
+function createClient() {
+  const url = databaseUrl();
+  if (!url) {
+    throw new Error(
+      "No database connection string. Netlify provides NETLIFY_DB_URL to production; " +
+        "for branch deploys set DATABASE_URL to the database's connection string.",
+    );
+  }
+  // prisma/schema.prisma names NETLIFY_DB_URL; keep it set for Prisma's checks.
+  process.env.NETLIFY_DB_URL ||= url;
+  return new PrismaClient({ datasourceUrl: url });
+}
 
 declare global {
   // eslint-disable-next-line no-var
