@@ -25,6 +25,12 @@ api_version = "2027-01"
   uri = "/webhooks/app/scopes_update"
   topics = [ "app/scopes_update" ]
 
+  # Mandatory privacy (GDPR) webhooks for public apps.
+  # Handled by: /app/routes/webhooks.compliance.tsx
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/compliance"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+
 [auth]
 redirect_urls = [ "https://sku-doctor-dev.netlify.app/auth/callback" ]
 

@@ -16,6 +16,12 @@ An embedded Shopify app with two tools:
 
 The app is read-only: it requests `read_products` and `read_inventory` and never changes your catalog.
 
+## Support, updates and privacy
+
+- Public pages: `/support`, `/updates` and `/privacy` on each site; in the app, **Updates** and **Support** in the nav. Text lives in `app/lib/site-content.ts` — add each release to the top of `UPDATES`.
+- Set `SUPPORT_EMAIL` on each Netlify site to show the contact address.
+- Uninstalling deletes all of a shop's data; the mandatory privacy webhooks are handled in `app/routes/webhooks.compliance.tsx`.
+
 ## Hosting
 
 Runs on **Netlify** (Functions) with **Netlify Database** (built-in Postgres), created from the project's Database page. Netlify provides the connection string as `NETLIFY_DB_URL`; `app/db.server.ts` also accepts the older `NETLIFY_DATABASE_URL` name.

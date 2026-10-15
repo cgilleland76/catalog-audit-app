@@ -23,6 +23,8 @@ export default function App() {
         <s-link href="/app">Catalog audit</s-link>
         <s-link href="/app/linesheet">Line sheet</s-link>
         <s-link href="/app/warehouse">Warehouse</s-link>
+        <s-link href="/app/updates">Updates</s-link>
+        <s-link href="/app/support">Support</s-link>
       </s-app-nav>
       <NavigationLoading />
       <Outlet />

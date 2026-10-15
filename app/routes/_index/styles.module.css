@@ -99,6 +99,23 @@
   color: #4a4a4a;
 }
 
+.links {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-top: 0.5rem;
+}
+
+.links a {
+  color: #4a4a4a;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.links a:hover {
+  color: #0e7c66;
+}
+
 :global(body) {
   margin: 0;
 }

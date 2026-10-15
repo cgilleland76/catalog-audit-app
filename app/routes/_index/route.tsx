@@ -1,5 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { redirect, Form, useLoaderData } from "react-router";
+import { redirect, Form, Link, useLoaderData } from "react-router";
 
 import { login } from "../../shopify.server";
 
@@ -68,6 +68,11 @@ export default function App() {
             </span>
           </li>
         </ul>
+        <nav className={styles.links}>
+          <Link to="/updates">Updates</Link>
+          <Link to="/support">Support</Link>
+          <Link to="/privacy">Privacy</Link>
+        </nav>
       </div>
     </div>
   );
