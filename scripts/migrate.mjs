@@ -4,6 +4,16 @@
 import { execSync } from "node:child_process";
 
 const env = { ...process.env };
+for (const key of ["NETLIFY_DATABASE_URL", "NETLIFY_DATABASE_URL_UNPOOLED"]) {
+  if (!env[key]) {
+    console.error(
+      `\n${key} is not set, so there is no database to set up.\n` +
+        "Create the database in Netlify (your project → Database / Extensions →" +
+        " Neon → Connect Netlify DB), then redeploy.\n",
+    );
+    process.exit(1);
+  }
+}
 const schema = env.DB_SCHEMA;
 if (schema) {
   for (const key of ["NETLIFY_DATABASE_URL", "NETLIFY_DATABASE_URL_UNPOOLED"]) {
