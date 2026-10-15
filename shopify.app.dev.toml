@@ -1,11 +1,12 @@
-# SKU Doctor Dev: the test app, installed on the dev store and served from the
-# `dev` branch on Netlify. Push changes with: npm run deploy -- --config dev
+# SKU Doctor Dev: the test app, installed on the dev store and served by the
+# sku-doctor-dev Netlify site (builds the `dev` branch). Push changes with:
+# npm run deploy -- --config dev
 
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "8b3c6f9b87ff02a22cdb1fadbd748be0"
 name = "SKU Doctor Dev"
-application_url = "https://dev--sku-doctor.netlify.app"
+application_url = "https://sku-doctor-dev.netlify.app"
 embedded = true
 
 [access_scopes]
@@ -24,7 +25,7 @@ api_version = "2027-01"
   topics = [ "app/scopes_update" ]
 
 [auth]
-redirect_urls = [ "https://dev--sku-doctor.netlify.app/auth/callback" ]
+redirect_urls = [ "https://sku-doctor-dev.netlify.app/auth/callback" ]
 
 [build]
 include_config_on_deploy = true

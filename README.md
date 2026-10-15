@@ -26,14 +26,15 @@ Netlify environment variables to set yourself: `SHOPIFY_API_KEY`, `SHOPIFY_API_S
 
 ## Dev and public apps
 
+Two Netlify sites build this one repo, each with its own Netlify Database:
+
 | | Dev | Public |
 |---|---|---|
 | Shopify app | SKU Doctor Dev (`shopify.app.dev.toml`) | SKU Doctor (`shopify.app.toml`) |
-| Branch | `dev` | `main` |
-| Netlify | `https://dev--<site>.netlify.app` (branch deploy) | `https://<site>.netlify.app` |
-| Database | `dev` schema (`DB_SCHEMA=dev`) | `public` schema |
+| Netlify site | `sku-doctor-dev` (production branch: `dev`) | `sku-doctor` (production branch: `main`) |
+| Address | `https://sku-doctor-dev.netlify.app` | `https://sku-doctor.netlify.app` |
 
-Netlify uses each app's own keys: set `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET` and `SHOPIFY_APP_URL` with a different value for the `dev` branch (Environment variables → "Branch deploys" / specific branch) than for production.
+Each site has its own environment variables (`SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL`, `SCOPES`, `CREDENTIALS_KEY`) for its Shopify app. `DB_SCHEMA` is optional and only needed if two apps ever share one database.
 
 **Releasing a change:** commit to `dev`, check it in SKU Doctor Dev, then merge `dev` into `main`. If a change touches the app config (scopes, URLs, webhooks), also run `npm run deploy -- --config dev` for dev and `npm run deploy` for public.
 
