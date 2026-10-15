@@ -6,6 +6,7 @@
 
 client_id = "8b3c6f9b87ff02a22cdb1fadbd748be0"
 name = "SKU Doctor Dev"
+handle = "sku-doctor-dev"
 application_url = "https://sku-doctor-dev.netlify.app"
 embedded = true
 
