@@ -6,7 +6,6 @@ client_id = "8b3c6f9b87ff02a22cdb1fadbd748be0"
 name = "SKU Doctor"
 application_url = "https://shopify.dev/apps/default-app-home"
 embedded = true
- 4ecc065 (Fix app scopes)
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
