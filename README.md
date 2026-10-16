@@ -50,7 +50,7 @@ Two Netlify sites build this one repo, each with its own Netlify Database:
 |---|---|---|
 | Shopify app | SKU Doctor Dev (`shopify.app.dev.toml`) | SKU Doctor (`shopify.app.toml`) |
 | Netlify site | `sku-doctor-dev` (production branch: `dev`) | `sku-doctor` (production branch: `main`) |
-| Address | `https://sku-doctor-dev.netlify.app` | `https://sku-doctor.netlify.app` |
+| Address | `https://sku-doctor-dev.netlify.app` | `https://skudoctor.thirdaxiscustoms.com` (custom domain on the `sku-doctor` site) |
 
 Each site has its own environment variables (`SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL`, `SCOPES`, `CREDENTIALS_KEY`) for its Shopify app. `DB_SCHEMA` is optional and only needed if two apps ever share one database.
 

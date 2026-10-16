@@ -6,7 +6,7 @@
 client_id = "8031ac5b7be507548716d6d50189e2cb"
 name = "SKU Doctor"
 handle = "sku-doctor-app"
-application_url = "https://sku-doctor.netlify.app"
+application_url = "https://skudoctor.thirdaxiscustoms.com"
 embedded = true
 
 [access_scopes]
@@ -31,7 +31,7 @@ api_version = "2027-01"
   compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
 
 [auth]
-redirect_urls = [ "https://sku-doctor.netlify.app/auth/callback" ]
+redirect_urls = [ "https://skudoctor.thirdaxiscustoms.com/auth/callback" ]
 
 [build]
 include_config_on_deploy = true

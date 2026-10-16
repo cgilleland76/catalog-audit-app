@@ -7,11 +7,15 @@ import { FAQ, supportEmail } from "../lib/site-content";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  return { email: supportEmail(), shop: session.shop };
+  return {
+    email: supportEmail(),
+    shop: session.shop,
+    privacyUrl: `${process.env.SHOPIFY_APP_URL ?? ""}/privacy`,
+  };
 };
 
 export default function SupportPage() {
-  const { email, shop } = useLoaderData<typeof loader>();
+  const { email, shop, privacyUrl } = useLoaderData<typeof loader>();
   const mailto = email
     ? `mailto:${email}?subject=${encodeURIComponent(`SKU Doctor support (${shop})`)}`
     : null;
@@ -57,7 +61,7 @@ export default function SupportPage() {
             <s-link href="/app/updates">What&apos;s new</s-link>
           </s-list-item>
           <s-list-item>
-            <s-link href="https://sku-doctor.netlify.app/privacy" target="_blank">
+            <s-link href={privacyUrl} target="_blank">
               Privacy policy
             </s-link>
           </s-list-item>
