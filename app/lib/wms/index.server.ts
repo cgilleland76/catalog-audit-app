@@ -2,6 +2,7 @@ import prisma from "../../db.server";
 import { decryptJson, encryptJson } from "../crypto.server";
 import type { CatalogRow } from "../catalog";
 import { shiphero } from "./shiphero.server";
+import { shipbob } from "./shipbob.server";
 import type {
   Mismatch,
   WmsProduct,
@@ -13,6 +14,7 @@ import type {
 // Add new warehouse systems here.
 export const PROVIDERS: Record<string, WmsProvider> = {
   [shiphero.id]: shiphero,
+  [shipbob.id]: shipbob,
 };
 
 export function getProvider(id: string): WmsProvider {
@@ -26,6 +28,8 @@ export const providerInfo = (p: WmsProvider): WmsProviderInfo => ({
   name: p.name,
   credentialFields: p.credentialFields,
   setupHelp: p.setupHelp,
+  comparesCost: p.comparesCost,
+  compareNotes: p.compareNotes,
 });
 
 export async function loadCredentials(shop: string, provider: string) {
@@ -173,19 +177,22 @@ export async function advanceComparison(
     const skus = JSON.parse(comparison.skus ?? "[]") as string[];
     const found = JSON.parse(comparison.found ?? "{}") as Record<string, WmsProduct>;
     let checked = comparison.checked;
+    let cursor = comparison.cursor;
 
     if (checked < skus.length) {
       const result = await provider.lookup(
         credentials,
         skus.slice(checked),
         Date.now() + STEP_MS,
+        cursor,
       );
       for (const p of result.found) found[p.sku.trim().toLowerCase()] = p;
       checked += result.processed;
+      cursor = result.cursor ?? null;
     }
 
     if (checked < skus.length) {
-      await finish({ checked, found: JSON.stringify(found) });
+      await finish({ checked, cursor, found: JSON.stringify(found) });
       return;
     }
 
@@ -204,6 +211,7 @@ export async function advanceComparison(
       checked,
       skus: null,
       found: null,
+      cursor: null,
       results: JSON.stringify(mismatches),
       finishedAt: new Date(),
     });

@@ -4,7 +4,7 @@ import type {
   HeadersFunction,
   LoaderFunctionArgs,
 } from "react-router";
-import { useFetcher, useLoaderData } from "react-router";
+import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
@@ -30,21 +30,70 @@ import {
   MISMATCH_INFO,
   type Mismatch,
   type MismatchCode,
+  type WmsProviderInfo,
 } from "../lib/wms/types";
 
-const providerFrom = (request: Request) =>
-  new URL(request.url).searchParams.get("provider") ??
-  Object.keys(PROVIDERS)[0];
+// ?provider=<id> opens that system's comparison; without it, the page lists
+// every supported system so merchants can connect one or more.
+const providerParam = (request: Request) =>
+  new URL(request.url).searchParams.get("provider");
+
+const summarize = (c: {
+  status: string;
+  checked: number;
+  total: number;
+  error: string | null;
+  startedAt: Date;
+  finishedAt: Date | null;
+  results: string | null;
+}) => ({
+  status: c.status,
+  checked: c.checked,
+  total: c.total,
+  error: c.error,
+  startedAt: c.startedAt.toISOString(),
+  finishedAt: c.finishedAt?.toISOString() ?? null,
+  differences: c.results ? (JSON.parse(c.results) as Mismatch[]).length : 0,
+});
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
-  const provider = getProvider(providerFrom(request));
   if (!canUseWarehouse(await getPlan(session.shop, admin))) {
     return { locked: true as const, upgradeUrl: planSelectionUrl(session.shop) };
   }
-  const catalog = await catalogForPage(session.shop, admin);
 
-  const credentials = await loadCredentials(session.shop, provider.id);
+  const param = providerParam(request);
+  const credentials = param ? await loadCredentials(session.shop, param) : null;
+
+  // The list of systems (also shown when the chosen system isn't connected).
+  if (!param || !PROVIDERS[param] || !credentials) {
+    const [connections, latest] = await Promise.all([
+      prisma.wmsConnection.findMany({
+        where: { shop: session.shop },
+        select: { provider: true, updatedAt: true },
+      }),
+      prisma.wmsComparison.findMany({
+        where: { shop: session.shop },
+        orderBy: { startedAt: "desc" },
+        distinct: ["provider"],
+      }),
+    ]);
+    return {
+      locked: false as const,
+      view: "list" as const,
+      systems: Object.values(PROVIDERS).map((p) => {
+        const comparison = latest.find((c) => c.provider === p.id);
+        return {
+          ...providerInfo(p),
+          connected: connections.some((c) => c.provider === p.id),
+          comparison: comparison ? summarize(comparison) : null,
+        };
+      }),
+    };
+  }
+
+  const provider = getProvider(param);
+  const catalog = await catalogForPage(session.shop, admin);
   const latest = await prisma.wmsComparison.findFirst({
     where: { shop: session.shop, provider: provider.id },
     orderBy: { startedAt: "desc" },
@@ -52,20 +101,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     locked: false as const,
+    view: "compare" as const,
     provider: providerInfo(provider),
-    providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, name: p.name })),
-    connected: credentials !== null,
     catalogCount: catalog.rows?.length ?? null,
     scannedAt: catalog.scannedAt,
     scan: catalog.scan,
     comparison: latest && {
       id: latest.id,
-      status: latest.status,
-      checked: latest.checked,
-      total: latest.total,
-      error: latest.error,
-      startedAt: latest.startedAt.toISOString(),
-      finishedAt: latest.finishedAt?.toISOString() ?? null,
+      ...summarize(latest),
       results: latest.results ? (JSON.parse(latest.results) as Mismatch[]) : [],
     },
   };
@@ -73,12 +116,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
-  const provider = getProvider(providerFrom(request));
   if (!canUseWarehouse(await getPlan(session.shop, admin))) {
     return { ok: false, message: "Warehouse comparison is part of the Warehouse plan" };
   }
   const form = await request.formData();
   const intent = form.get("intent");
+  const provider = getProvider(
+    String(form.get("provider") ?? providerParam(request) ?? ""),
+  );
 
   if (intent === "connect") {
     const credentials: Record<string, string> = {};
@@ -144,6 +189,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 const PAGE_SIZE = 100;
 const CODES = Object.keys(MISMATCH_INFO) as MismatchCode[];
 
+type Loaded = Extract<
+  ReturnType<typeof useLoaderData<typeof loader>>,
+  { locked: false }
+>;
+
 export default function WarehousePage() {
   const data = useLoaderData<typeof loader>();
   if (data.locked) {
@@ -157,32 +207,251 @@ export default function WarehousePage() {
       </s-page>
     );
   }
-  return <WarehouseLoaded {...data} />;
+  return data.view === "list" ? (
+    <WarehouseSystems {...data} />
+  ) : (
+    <WarehouseComparison {...data} />
+  );
 }
 
-function WarehouseLoaded({
+const modalId = (providerId: string) => `connect-${providerId}`;
+
+function comparisonSummary(
+  c: NonNullable<Extract<Loaded, { view: "list" }>["systems"][number]["comparison"]>,
+) {
+  if (c.status === "running") {
+    return `Running — ${c.checked.toLocaleString()} of ${c.total.toLocaleString()} checked`;
+  }
+  if (c.status === "failed") return "Last comparison failed";
+  return `${c.differences.toLocaleString()} differences in ${c.total.toLocaleString()} SKUs · ${new Date(c.finishedAt ?? c.startedAt).toLocaleDateString()}`;
+}
+
+function WarehouseSystems({ systems }: Extract<Loaded, { view: "list" }>) {
+  const navigate = useNavigate();
+  const fetcher = useFetcher<typeof action>();
+  const shopify = useAppBridge();
+  const connectedCount = systems.filter((s) => s.connected).length;
+
+  useEffect(() => {
+    if (fetcher.data) {
+      shopify.toast.show(fetcher.data.message, { isError: !fetcher.data.ok });
+    }
+  }, [fetcher.data, shopify]);
+
+  return (
+    <s-page heading="Warehouse comparison">
+      <s-section heading="Warehouse systems">
+        <s-stack direction="block" gap="base">
+          <s-paragraph>
+            Connect the warehouse systems you use, one or several. SKU Doctor
+            compares each one with your Shopify catalog on its own.
+          </s-paragraph>
+          <s-table>
+            <s-table-header-row>
+              <s-table-header listSlot="primary">System</s-table-header>
+              <s-table-header listSlot="inline">Status</s-table-header>
+              <s-table-header listSlot="secondary">Last comparison</s-table-header>
+              <s-table-header>Actions</s-table-header>
+            </s-table-header-row>
+            <s-table-body>
+              {systems.map((system) => {
+                const disconnecting =
+                  fetcher.state !== "idle" &&
+                  fetcher.formData?.get("provider") === system.id;
+                return (
+                  <s-table-row key={system.id}>
+                    <s-table-cell>
+                      <s-text type="strong">{system.name}</s-text>
+                    </s-table-cell>
+                    <s-table-cell>
+                      {system.connected ? (
+                        <s-badge tone="success">Connected</s-badge>
+                      ) : (
+                        <s-badge>Not connected</s-badge>
+                      )}
+                    </s-table-cell>
+                    <s-table-cell>
+                      {system.connected && system.comparison
+                        ? comparisonSummary(system.comparison)
+                        : "—"}
+                    </s-table-cell>
+                    <s-table-cell>
+                      {system.connected ? (
+                        <s-stack direction="inline" gap="small-200">
+                          <s-button
+                            variant="primary"
+                            onClick={() => navigate(`/app/warehouse?provider=${system.id}`)}
+                          >
+                            Open comparison
+                          </s-button>
+                          <s-button commandFor={modalId(system.id)} command="--show">
+                            Update token
+                          </s-button>
+                          <s-button
+                            variant="tertiary"
+                            tone="critical"
+                            onClick={() =>
+                              fetcher.submit(
+                                { intent: "disconnect", provider: system.id },
+                                { method: "POST" },
+                              )
+                            }
+                            {...(disconnecting ? { loading: true } : {})}
+                          >
+                            Disconnect
+                          </s-button>
+                        </s-stack>
+                      ) : (
+                        <s-button
+                          variant="primary"
+                          commandFor={modalId(system.id)}
+                          command="--show"
+                        >
+                          Connect
+                        </s-button>
+                      )}
+                    </s-table-cell>
+                  </s-table-row>
+                );
+              })}
+            </s-table-body>
+          </s-table>
+        </s-stack>
+      </s-section>
+
+      {systems.map((system) => (
+        <ConnectModal
+          key={system.id}
+          provider={system}
+          reconnect={system.connected}
+          onConnected={() =>
+            // Straight to the comparison for a first connection.
+            !system.connected && navigate(`/app/warehouse?provider=${system.id}`)
+          }
+        />
+      ))}
+
+      <s-section slot="aside" heading="How it works">
+        <s-unordered-list>
+          <s-list-item>
+            {connectedCount === 0
+              ? "Choose Connect next to your warehouse system"
+              : `${connectedCount} of ${systems.length} systems connected`}
+          </s-list-item>
+          <s-list-item>Tokens are tested before they&apos;re saved, and stored encrypted</s-list-item>
+          <s-list-item>Read-only: nothing is changed in Shopify or your warehouse</s-list-item>
+        </s-unordered-list>
+      </s-section>
+      <s-section slot="aside" heading="Need another system?">
+        <s-paragraph>
+          Tell us which warehouse system you use on the{" "}
+          <s-link href="/app/support">Support</s-link> page.
+        </s-paragraph>
+      </s-section>
+    </s-page>
+  );
+}
+
+/** Popout with a system's credential fields; tests them before saving. */
+function ConnectModal({
   provider,
-  connected,
+  reconnect,
+  onConnected,
+}: {
+  provider: WmsProviderInfo;
+  reconnect: boolean;
+  onConnected: () => void;
+}) {
+  const fetcher = useFetcher<typeof action>();
+  const shopify = useAppBridge();
+  const [credentials, setCredentials] = useState<Record<string, string>>({});
+  const busy = fetcher.state !== "idle";
+
+  useEffect(() => {
+    if (!fetcher.data) return;
+    shopify.toast.show(fetcher.data.message, { isError: !fetcher.data.ok });
+    if (fetcher.data.ok) {
+      const modal = document.getElementById(modalId(provider.id)) as
+        | (HTMLElement & { hideOverlay?: () => void })
+        | null;
+      modal?.hideOverlay?.();
+      onConnected();
+    }
+    // onConnected changes every render; react only to new results.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.data, shopify]);
+
+  return (
+    <s-modal
+      id={modalId(provider.id)}
+      heading={`${reconnect ? "Update" : "Connect"} ${provider.name}`}
+    >
+      <s-stack direction="block" gap="base">
+        <s-paragraph>{provider.setupHelp}</s-paragraph>
+        {fetcher.data && !fetcher.data.ok && (
+          <s-banner tone="critical">{fetcher.data.message}</s-banner>
+        )}
+        {provider.credentialFields.map((field) => {
+          const props = {
+            label: field.label + (field.optional ? " (optional)" : ""),
+            details: field.helpText,
+            value: credentials[field.key] ?? "",
+            onInput: (e: Event) => {
+              const value = (e.currentTarget as HTMLInputElement).value;
+              setCredentials((c) => ({ ...c, [field.key]: value }));
+            },
+          };
+          return field.secret ? (
+            <s-password-field key={field.key} {...props} />
+          ) : (
+            <s-text-field key={field.key} {...props} />
+          );
+        })}
+      </s-stack>
+      <s-button
+        slot="primary-action"
+        variant="primary"
+        onClick={() =>
+          fetcher.submit(
+            { ...credentials, intent: "connect", provider: provider.id },
+            { method: "POST" },
+          )
+        }
+        {...(busy ? { loading: true } : {})}
+      >
+        Test and connect
+      </s-button>
+      <s-button slot="secondary-actions" commandFor={modalId(provider.id)} command="--hide">
+        Cancel
+      </s-button>
+    </s-modal>
+  );
+}
+
+function WarehouseComparison({
+  provider,
   comparison,
   catalogCount,
   scannedAt,
   scan: initialScan,
-}: Extract<ReturnType<typeof useLoaderData<typeof loader>>, { locked: false }>) {
+}: Extract<Loaded, { view: "compare" }>) {
   const catalogScan = useCatalogScan(initialScan, scannedAt);
   const catalogReady = catalogCount !== null;
   const fetcher = useFetcher<typeof action>();
   const stepper = useFetcher<typeof action>();
   const shopify = useAppBridge();
+  const navigate = useNavigate();
 
-  const [credentials, setCredentials] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState<MismatchCode | "all">("weight_mismatch");
   const [limit, setLimit] = useState(PAGE_SIZE);
 
   const busy = fetcher.state !== "idle";
   const running = comparison?.status === "running";
+  const codes = CODES.filter((k) => k !== "cost_mismatch" || provider.comparesCost);
 
   useEffect(() => {
     if (!fetcher.data) return;
+    // After a disconnect the loader returns the list of systems by itself.
     shopify.toast.show(fetcher.data.message, { isError: !fetcher.data.ok });
   }, [fetcher.data, shopify]);
 
@@ -192,13 +461,13 @@ function WarehouseLoaded({
     if (!running) return;
     const tick = () => {
       if (stepper.state === "idle") {
-        stepper.submit({ intent: "step" }, { method: "POST" });
+        stepper.submit({ intent: "step", provider: provider.id }, { method: "POST" });
       }
     };
     tick();
     const timer = setInterval(tick, 2000);
     return () => clearInterval(timer);
-  }, [running, stepper]);
+  }, [running, stepper, provider.id]);
 
   const results = useMemo(() => comparison?.results ?? [], [comparison]);
   const counts = useMemo(() => {
@@ -215,7 +484,7 @@ function WarehouseLoaded({
   );
 
   const submit = (data: Record<string, string>) =>
-    fetcher.submit(data, { method: "POST" });
+    fetcher.submit({ ...data, provider: provider.id }, { method: "POST" });
 
   const exportCsv = () => {
     downloadFile(
@@ -238,19 +507,23 @@ function WarehouseLoaded({
 
   return (
     <s-page heading={`${provider.name} comparison`}>
-      {connected && (
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          disabled={running || busy || !catalogReady}
-          onClick={() => submit({ intent: "compare" })}
-          {...(busy && fetcher.formData?.get("intent") === "compare"
-            ? { loading: true }
-            : {})}
-        >
-          Run comparison
-        </s-button>
-      )}
+      <s-link slot="breadcrumb-actions" onClick={() => navigate("/app/warehouse")}>
+        Warehouse systems
+      </s-link>
+      <s-button
+        slot="primary-action"
+        variant="primary"
+        disabled={running || busy || !catalogReady}
+        onClick={() => submit({ intent: "compare" })}
+        {...(busy && fetcher.formData?.get("intent") === "compare"
+          ? { loading: true }
+          : {})}
+      >
+        Run comparison
+      </s-button>
+      <s-button slot="secondary-actions" onClick={() => navigate("/app/warehouse")}>
+        All warehouse systems
+      </s-button>
       {comparison?.status === "done" && results.length > 0 && (
         <s-button slot="secondary-actions" onClick={exportCsv}>
           Export (CSV)
@@ -280,38 +553,7 @@ function WarehouseLoaded({
         </s-banner>
       )}
 
-      {!connected && (
-        <s-section heading={`Connect ${provider.name}`}>
-          <s-stack direction="block" gap="base">
-            <s-paragraph>{provider.setupHelp}</s-paragraph>
-            {provider.credentialFields.map((field) => {
-              const props = {
-                label: field.label + (field.optional ? " (optional)" : ""),
-                details: field.helpText,
-                value: credentials[field.key] ?? "",
-                onInput: (e: Event) => {
-                  const value = (e.currentTarget as HTMLInputElement).value;
-                  setCredentials((c) => ({ ...c, [field.key]: value }));
-                },
-              };
-              return field.secret ? (
-                <s-password-field key={field.key} {...props} />
-              ) : (
-                <s-text-field key={field.key} {...props} />
-              );
-            })}
-            <s-button
-              variant="primary"
-              onClick={() => submit({ intent: "connect", ...credentials })}
-              {...(busy ? { loading: true } : {})}
-            >
-              Test and connect
-            </s-button>
-          </s-stack>
-        </s-section>
-      )}
-
-      {connected && !comparison && (
+      {!comparison && (
         <s-section>
           <s-paragraph>
             Connected. Run a comparison to check every Shopify SKU against{" "}
@@ -325,8 +567,9 @@ function WarehouseLoaded({
           <s-stack direction="inline" gap="base" alignItems="center">
             <s-spinner accessibilityLabel="Comparing" />
             <s-text>
-              Checked {comparison.checked.toLocaleString()} of{" "}
-              {comparison.total.toLocaleString()} SKUs in {provider.name}.
+              {comparison.checked === 0 && comparison.total > 0
+                ? `Reading products from ${provider.name} to check ${comparison.total.toLocaleString()} SKUs.`
+                : `Checked ${comparison.checked.toLocaleString()} of ${comparison.total.toLocaleString()} SKUs in ${provider.name}.`}{" "}
               Keep this page open; the comparison pauses while it&apos;s
               closed and picks up where it left off when you return.
             </s-text>
@@ -349,7 +592,7 @@ function WarehouseLoaded({
               {new Date(comparison.finishedAt ?? comparison.startedAt).toLocaleString()}
             </s-text>
             <s-stack direction="inline" gap="small-200">
-              {CODES.map((k) => (
+              {codes.map((k) => (
                 <s-clickable-chip
                   key={k}
                   color={filter === k ? "strong" : "base"}
@@ -416,21 +659,19 @@ function WarehouseLoaded({
         </s-section>
       )}
 
-      {connected && (
-        <s-section slot="aside" heading="Connection">
-          <s-stack direction="block" gap="base">
-            <s-badge tone="success">Connected to {provider.name}</s-badge>
-            <s-button
-              variant="tertiary"
-              tone="critical"
-              disabled={running}
-              onClick={() => submit({ intent: "disconnect" })}
-            >
-              Disconnect
-            </s-button>
-          </s-stack>
-        </s-section>
-      )}
+      <s-section slot="aside" heading="Connection">
+        <s-stack direction="block" gap="base">
+          <s-badge tone="success">Connected to {provider.name}</s-badge>
+          <s-button
+            variant="tertiary"
+            tone="critical"
+            disabled={running}
+            onClick={() => submit({ intent: "disconnect" })}
+          >
+            Disconnect
+          </s-button>
+        </s-stack>
+      </s-section>
 
       <s-section slot="aside" heading="Shopify catalog">
         <s-stack direction="block" gap="small">
@@ -452,11 +693,14 @@ function WarehouseLoaded({
       <s-section slot="aside" heading="How it compares">
         <s-unordered-list>
           <s-list-item>Matches on SKU, ignoring case</s-list-item>
-          <s-list-item>Weight in pounds and cost to the cent</s-list-item>
           <s-list-item>
-            Kits with no weight or cost of their own use the sum of their
-            components
+            {provider.comparesCost
+              ? "Weight in pounds and cost to the cent"
+              : "Weight in pounds and barcode"}
           </s-list-item>
+          {provider.compareNotes.map((note) => (
+            <s-list-item key={note}>{note}</s-list-item>
+          ))}
           <s-list-item>Archived products are skipped</s-list-item>
           <s-list-item>Read-only: nothing is changed in either system</s-list-item>
         </s-unordered-list>

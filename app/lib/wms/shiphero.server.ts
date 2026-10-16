@@ -199,6 +199,10 @@ type LookupResult = Record<string, { data: { edges: { node: Node }[] } } | null>
 export const shiphero: WmsProvider = {
   id: "shiphero",
   name: "ShipHero",
+  comparesCost: true,
+  compareNotes: [
+    "Kits with no weight or cost of their own use the sum of their components",
+  ],
   setupHelp:
     "Create an API refresh token in ShipHero (a third-party developer user's token works). Brands on a 3PL's ShipHero account also need their customer account ID.",
   credentialFields: [

@@ -102,6 +102,12 @@ ALTER TABLE "WmsComparison" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "CatalogScan" ENABLE ROW LEVEL SECURITY;
 `,
   },
+  {
+    name: "20261016120000_comparison_cursor",
+    sql: `
+ALTER TABLE "WmsComparison" ADD COLUMN "cursor" TEXT;
+`,
+  },
 ];
 
 const statements = (sql: string) =>

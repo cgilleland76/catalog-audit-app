@@ -9,6 +9,14 @@ export type Update = {
 
 export const UPDATES: Update[] = [
   {
+    date: "2026-10-16",
+    title: "ShipBob and multiple warehouses",
+    items: [
+      "Warehouse comparison now works with ShipBob: weight, barcode and cost (ShipBob's customs value) are checked against Shopify.",
+      "The Warehouse page lists every supported system. Choose Connect to set one up, and connect as many as you use; each is compared on its own.",
+    ],
+  },
+  {
     date: "2026-10-15",
     title: "SKU Doctor 1.0",
     items: [
@@ -39,9 +47,9 @@ export const FAQ: FaqEntry[] = [
       "Warehouse systems limit how fast apps can look up products. SKU Doctor checks your SKUs in batches and pauses when asked to, so a large catalog can take several minutes. Keep the Warehouse page open while it runs; it picks up where it left off if you leave.",
   },
   {
-    question: "How do I connect ShipHero?",
+    question: "How do I connect a warehouse system?",
     answer:
-      "Open Warehouse, paste a ShipHero API refresh token (and your customer account ID if your warehouse is a 3PL), then choose Test and connect. The token is stored encrypted.",
+      "Open Warehouse and choose Connect next to your system. For ShipHero, paste an API refresh token (and your customer account ID if your warehouse is a 3PL). For ShipBob, paste a Personal Access Token from Integrations → API Tokens. Then choose Test and connect. Tokens are stored encrypted, and you can connect more than one system.",
   },
   {
     question: "What happens to my data if I uninstall?",
