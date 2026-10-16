@@ -26,7 +26,7 @@ Billing uses Shopify App Pricing: the plans are set up in the Dev Dashboard (app
 | Pro | $14.99/month | Unlimited audit, line sheets |
 | Warehouse | $39/month | Pro + warehouse comparison |
 
-Paid plans have a 14-day free trial and are billed monthly. The app reads the shop's active plan by name (`app/lib/plans.server.ts`), so plan names in the dashboard must contain "Pro" and "Warehouse". Set `SHOPIFY_APP_HANDLE` on each Netlify site (`sku-doctor-app` / `sku-doctor-dev`) so the "See plans" buttons open the right app's plan picker.
+Paid plans have a 14-day free trial and are billed monthly. The app reads the shop's active plan by name (`app/lib/plans.server.ts`), so plan names in the dashboard must contain "Pro" and "Warehouse". The dev app has no App Store pricing: set `PLAN_OVERRIDE=warehouse` on the `sku-doctor-dev` site to unlock everything there (never on the public site). Set `SHOPIFY_APP_HANDLE` on each Netlify site (`sku-doctor-app` / `sku-doctor-dev`) so the "See plans" buttons open the right app's plan picker.
 
 ## Support, updates and privacy
 
