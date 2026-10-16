@@ -3,7 +3,7 @@ import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { authenticate } from "../shopify.server";
-import { getPlan, planSelectionUrl } from "../lib/plans.server";
+import { getPlan, planOverride, planSelectionUrl } from "../lib/plans.server";
 import { PLANS, type PlanId } from "../lib/plans";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -11,19 +11,30 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return {
     plan: await getPlan(session.shop, admin),
     upgradeUrl: planSelectionUrl(session.shop),
+    // Set on the dev site, which has no Shopify plan picker to link to.
+    overridden: planOverride() !== null,
   };
 };
 
 const ORDER: PlanId[] = ["free", "pro", "warehouse"];
 
 export default function PlansPage() {
-  const { plan, upgradeUrl } = useLoaderData<typeof loader>();
+  const { plan, upgradeUrl, overridden } = useLoaderData<typeof loader>();
 
   return (
     <s-page heading="Plans">
-      <s-button slot="primary-action" variant="primary" href={upgradeUrl} target="_top">
-        {plan === "free" ? "Choose a plan" : "Change plan"}
-      </s-button>
+      {!overridden && (
+        <s-button slot="primary-action" variant="primary" href={upgradeUrl} target="_top">
+          {plan === "free" ? "Choose a plan" : "Change plan"}
+        </s-button>
+      )}
+
+      {overridden && (
+        <s-banner tone="info" heading="Test app: plan set by PLAN_OVERRIDE">
+          This copy of SKU Doctor has the {PLANS[plan].name} plan unlocked for
+          testing, so there&apos;s no plan to choose or pay for here.
+        </s-banner>
+      )}
 
       <s-section>
         <s-paragraph>

@@ -18,17 +18,22 @@ const ACTIVE_SUBSCRIPTIONS = `#graphql
 const cache = new Map<string, { plan: PlanId; at: number }>();
 const CACHE_MS = 60_000;
 
+/**
+ * The dev app has no App Store pricing; its site sets PLAN_OVERRIDE (e.g.
+ * "warehouse") to unlock features for testing. Never set it on the public site.
+ */
+export function planOverride(): PlanId | null {
+  const value = process.env.PLAN_OVERRIDE?.trim().toLowerCase();
+  return value === "free" || value === "pro" || value === "warehouse" ? value : null;
+}
+
 /** The shop's current SKU Doctor plan, from its active Shopify App Pricing subscription. */
 export async function getPlan(
   shop: string,
   admin: AdminApiContext,
 ): Promise<PlanId> {
-  // The dev app has no App Store pricing; its site sets PLAN_OVERRIDE (e.g.
-  // "warehouse") to unlock features for testing. Never set it on the public site.
-  const override = process.env.PLAN_OVERRIDE?.trim().toLowerCase();
-  if (override === "free" || override === "pro" || override === "warehouse") {
-    return override;
-  }
+  const override = planOverride();
+  if (override) return override;
 
   const hit = cache.get(shop);
   if (hit && Date.now() - hit.at < CACHE_MS) return hit.plan;
