@@ -11,6 +11,9 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 import { catalogForPage, loadCatalog } from "../lib/catalog.server";
+import { getPlan, planSelectionUrl } from "../lib/plans.server";
+import { canUseWarehouse } from "../lib/plans";
+import { UpgradeSection } from "../components/Upgrade";
 import { ScanBanner, useCatalogScan } from "../components/CatalogScan";
 import { downloadFile, numericId, toCsv } from "../lib/catalog";
 import {
@@ -36,6 +39,9 @@ const providerFrom = (request: Request) =>
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const provider = getProvider(providerFrom(request));
+  if (!canUseWarehouse(await getPlan(session.shop, admin))) {
+    return { locked: true as const, upgradeUrl: planSelectionUrl(session.shop) };
+  }
   const catalog = await catalogForPage(session.shop, admin);
 
   const credentials = await loadCredentials(session.shop, provider.id);
@@ -45,6 +51,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 
   return {
+    locked: false as const,
     provider: providerInfo(provider),
     providers: Object.values(PROVIDERS).map((p) => ({ id: p.id, name: p.name })),
     connected: credentials !== null,
@@ -65,8 +72,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const provider = getProvider(providerFrom(request));
+  if (!canUseWarehouse(await getPlan(session.shop, admin))) {
+    return { ok: false, message: "Warehouse comparison is part of the Warehouse plan" };
+  }
   const form = await request.formData();
   const intent = form.get("intent");
 
@@ -135,14 +145,29 @@ const PAGE_SIZE = 100;
 const CODES = Object.keys(MISMATCH_INFO) as MismatchCode[];
 
 export default function WarehousePage() {
-  const {
-    provider,
-    connected,
-    comparison,
-    catalogCount,
-    scannedAt,
-    scan: initialScan,
-  } = useLoaderData<typeof loader>();
+  const data = useLoaderData<typeof loader>();
+  if (data.locked) {
+    return (
+      <s-page heading="Warehouse comparison">
+        <UpgradeSection
+          feature="Warehouse comparison"
+          needs="warehouse"
+          upgradeUrl={data.upgradeUrl}
+        />
+      </s-page>
+    );
+  }
+  return <WarehouseLoaded {...data} />;
+}
+
+function WarehouseLoaded({
+  provider,
+  connected,
+  comparison,
+  catalogCount,
+  scannedAt,
+  scan: initialScan,
+}: Extract<ReturnType<typeof useLoaderData<typeof loader>>, { locked: false }>) {
   const catalogScan = useCatalogScan(initialScan, scannedAt);
   const catalogReady = catalogCount !== null;
   const fetcher = useFetcher<typeof action>();

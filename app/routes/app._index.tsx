@@ -5,6 +5,8 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { authenticate } from "../shopify.server";
 import { catalogForPage } from "../lib/catalog.server";
+import { getPlan, planSelectionUrl } from "../lib/plans.server";
+import { FREE_VARIANT_LIMIT } from "../lib/plans";
 import { ScanBanner, ScanProgress, useCatalogScan } from "../components/CatalogScan";
 import {
   ISSUE_INFO,
@@ -19,14 +21,19 @@ import {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
-  return catalogForPage(session.shop, admin);
+  const [catalog, plan] = await Promise.all([
+    catalogForPage(session.shop, admin),
+    getPlan(session.shop, admin),
+  ]);
+  return { ...catalog, plan, upgradeUrl: planSelectionUrl(session.shop) };
 };
 
 const PAGE_SIZE = 100;
 const ISSUE_CODES = Object.keys(ISSUE_INFO) as IssueCode[];
 
 export default function AuditPage() {
-  const { rows, scannedAt, scan: initialScan } = useLoaderData<typeof loader>();
+  const { rows, scannedAt, scan: initialScan, plan, upgradeUrl } =
+    useLoaderData<typeof loader>();
   const { scan, running, rescan } = useCatalogScan(initialScan, scannedAt);
 
   if (!rows) {
@@ -36,11 +43,31 @@ export default function AuditPage() {
       </s-page>
     );
   }
+  // The Free plan audits the first FREE_VARIANT_LIMIT variants.
+  const limited = plan === "free" && rows.length > FREE_VARIANT_LIMIT;
   return (
     <AuditResults
-      rows={rows}
+      rows={limited ? rows.slice(0, FREE_VARIANT_LIMIT) : rows}
       scannedAt={scannedAt ?? ""}
-      banner={<ScanBanner scan={scan} scannedAt={scannedAt} onRetry={rescan} />}
+      banner={
+        <>
+          <ScanBanner scan={scan} scannedAt={scannedAt} onRetry={rescan} />
+          {limited && (
+            <s-banner tone="info" heading="Showing your first 500 variants">
+              <s-stack direction="block" gap="small">
+                <s-text>
+                  The Free plan audits up to {FREE_VARIANT_LIMIT} variants. Your
+                  catalog has {rows.length.toLocaleString()}. Upgrade to Pro to
+                  audit all of them; it starts with a 14-day free trial.
+                </s-text>
+                <s-button href={upgradeUrl} target="_top">
+                  See plans
+                </s-button>
+              </s-stack>
+            </s-banner>
+          )}
+        </>
+      }
       running={running}
       rescan={rescan}
     />

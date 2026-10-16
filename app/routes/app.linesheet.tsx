@@ -6,6 +6,9 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { authenticate } from "../shopify.server";
 import { catalogForPage } from "../lib/catalog.server";
+import { getPlan, planSelectionUrl } from "../lib/plans.server";
+import { canUseLineSheets } from "../lib/plans";
+import { UpgradeSection } from "../components/Upgrade";
 import { downloadFile, toCsv, type CatalogRow } from "../lib/catalog";
 import { ScanBanner, ScanProgress, useCatalogScan } from "../components/CatalogScan";
 import {
@@ -17,7 +20,11 @@ import {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
-  return catalogForPage(session.shop, admin);
+  const plan = await getPlan(session.shop, admin);
+  if (!canUseLineSheets(plan)) {
+    return { locked: true as const, upgradeUrl: planSelectionUrl(session.shop) };
+  }
+  return { locked: false as const, ...(await catalogForPage(session.shop, admin)) };
 };
 
 const ALL = "__all__";
@@ -26,7 +33,22 @@ const uniqueSorted = (values: string[]) =>
   [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
 export default function LineSheetPage() {
-  const { rows, scannedAt, scan: initialScan } = useLoaderData<typeof loader>();
+  const data = useLoaderData<typeof loader>();
+  if (data.locked) {
+    return (
+      <s-page heading="Line sheet">
+        <UpgradeSection feature="Line sheets" needs="pro" upgradeUrl={data.upgradeUrl} />
+      </s-page>
+    );
+  }
+  return <LineSheetLoaded {...data} />;
+}
+
+function LineSheetLoaded({
+  rows,
+  scannedAt,
+  scan: initialScan,
+}: Extract<ReturnType<typeof useLoaderData<typeof loader>>, { locked: false }>) {
   const { scan, running, rescan } = useCatalogScan(initialScan, scannedAt);
 
   if (!rows) {

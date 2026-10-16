@@ -16,6 +16,18 @@ An embedded Shopify app with two tools:
 
 The app is read-only: it requests `read_products` and `read_inventory` and never changes your catalog.
 
+## Plans and billing
+
+Billing uses Shopify App Pricing: the plans are set up in the Dev Dashboard (app → Pricing), and Shopify hosts the plan picker and invoices merchants.
+
+| Plan | Price | Includes |
+|---|---|---|
+| Free | $0 | Catalog audit for up to 500 variants |
+| Pro | $14.99/month | Unlimited audit, line sheets |
+| Warehouse | $39/month | Pro + warehouse comparison |
+
+Paid plans have a 14-day free trial and are billed monthly. The app reads the shop's active plan by name (`app/lib/plans.server.ts`), so plan names in the dashboard must contain "Pro" and "Warehouse". Set `SHOPIFY_APP_HANDLE` on each Netlify site (`sku-doctor-app` / `sku-doctor-dev`) so the "See plans" buttons open the right app's plan picker.
+
 ## Support, updates and privacy
 
 - Public pages: `/support`, `/updates` and `/privacy` on each site; in the app, **Updates** and **Support** in the nav. Text lives in `app/lib/site-content.ts` — add each release to the top of `UPDATES`.
