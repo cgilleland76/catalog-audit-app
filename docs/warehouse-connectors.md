@@ -6,7 +6,7 @@ system below would be one more `WmsProvider` registered in
 `app/lib/wms/index.server.ts`. Confirm each API's product fields against the
 vendor's docs before building.
 
-_Last reviewed: October 16, 2026 (Extensiv links fixed). Vendor onboarding changes often — check the
+_Last reviewed: October 17, 2026 (added Veeqo, ShipStation, Katana, Flexport, Extensiv Order Manager, inFlow, ShipNetwork). Vendor onboarding changes often — check the
 linked pages before requesting access._
 
 | Priority | System | Test access | How to get credentials | Notes |
@@ -17,6 +17,13 @@ linked pages before requesting access._
 | 4 | **Logiwa** | Sandbox exists: [developer portal](https://developer.logiwa.com) · [API reference (Swagger)](https://myapi.logiwa.com/swagger/index.html); sandbox host `myapisandbox.logiwa.com` | Request API credentials from Logiwa for a sandbox tenant (OAuth password grant) | High-volume DTC and 3PLs |
 | 5 | **ShipMonk** | Sandbox documented: [API docs](https://apidocs.shipmonk.com/docs/intro) | Needs an active, API-enabled ShipMonk account; request an API key and store ID from ShipMonk support or your account manager (integrations team replies within ~48 hours), then **Integration API Keys** | Not self-serve |
 | 6 | **Packiyo** | No sandbox found: [developer docs](https://developers.packiyo.com) | In the Packiyo app: **profile menu → Access Tokens** (needs a Packiyo account) | Terms forbid excessive polling |
+| 7 | **Veeqo** (Amazon) | Free plan: [API docs](https://developers.veeqo.com/api) · [developer forum](https://developer-forum.veeqo.com/) | Sign up free, then create an API key from your user/employee profile; sent as the `x-api-key` header | Products are "sellables" with SKU, cost and weight; confirm field names in the API reference |
+| 8 | **ShipStation** | No free API access: [getting started (V2)](https://docs.shipstation.com/getting-started) · [Free/Starter plans](https://docs.shipstation.com/plans/shipstation-free-starter) · [API keys](https://help.shipstation.com/hc/en-us/articles/360025856212-ShipStation-API) | Needs a paid plan with API access (docs now say Standard or Premium; 2025 notices said Gold+). Settings → Account → API Settings; one active V2 key at a time | Very common with Shopify merchants; check the API Settings page to see if a plan includes API |
+| 9 | **Katana** | Professional plan or higher: [getting started](https://developer.katanamrp.com/docs) · [API reference](https://developer.katanamrp.com/reference) | Settings → API → API keys; Bearer token to `api.katanamrp.com/v1` | Manufacturing/inventory; check whether the free trial includes API |
+| 10 | **Flexport** (fulfillment) | Sandbox on request: [Logistics API getting started](https://docs.logistics-api.flexport.com) | Register a separate Seller Portal account and ask Flexport Support to convert it to a sandbox; tokens under Settings → API Tokens (admin only) | Sandbox and production use the same endpoint, separate tokens |
+| 11 | **Extensiv Order Manager** (formerly Skubana) | Sandbox on request: [OM API help](https://extensiv.helpjuice.com/om-api) · [developer portal](https://developer.extensiv.com/) | Email Extensiv support (support-oms@extensiv.com) for developer/sandbox access; OAuth 2.0 private-app install | Separate product from Extensiv 3PL Warehouse Manager |
+| 12 | **inFlow Inventory** | Paid add-on: [inFlow API](https://www.inflowinventory.com/support/cloud/inflows-api) | Needs a paid plan plus the API add-on (reported $29 to $69 a month); API key and company ID from the app | Products include cost; weight field unconfirmed |
+| 13 | **ShipNetwork** | Sandbox for customers: [sandbox FAQ](https://www.shipnetwork.com/faqs/is-there-a-sandbox-environment-for-testing-integrations) | Ask ShipNetwork for sandbox credentials | 3PL; inventory endpoints confirmed, product fields unconfirmed |
 
-Easiest to start: ShipBob (self-serve sandbox). Highest leverage: Extensiv
+Easiest to start: ShipBob (self-serve sandbox; sign-up currently needs approval from ShipBob support), then Cin7 Core (trial includes API) and Veeqo (free plan). Highest leverage: Extensiv
 (needs a cooperating 3PL).
