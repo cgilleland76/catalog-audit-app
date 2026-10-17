@@ -1,4 +1,5 @@
 import type { WmsCredentials, WmsProduct, WmsProvider } from "./types";
+import { TO_LB } from "./units";
 
 // ShipBob's REST API uses dated versions; products list 250 per page.
 const API_VERSION = "2026-07";
@@ -66,22 +67,6 @@ function nextUrlOf(body: unknown, link: string | null, base: string): string | n
   const m = link && /<([^>]+)>;\s*rel="?next"?/i.exec(link);
   return m ? m[1] : null;
 }
-
-const TO_LB: Record<string, number> = {
-  oz: 1 / 16,
-  ounce: 1 / 16,
-  ounces: 1 / 16,
-  lb: 1,
-  lbs: 1,
-  pound: 1,
-  pounds: 1,
-  g: 1 / 453.59237,
-  gram: 1 / 453.59237,
-  grams: 1 / 453.59237,
-  kg: 2.20462262,
-  kilogram: 2.20462262,
-  kilograms: 2.20462262,
-};
 
 /** ShipBob weights are ounces as a number, or `{ value|weight, unit }`. */
 export function weightLb(raw: unknown): number | null {
