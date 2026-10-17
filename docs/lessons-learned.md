@@ -30,9 +30,13 @@ Read this before changing anything. Each entry is a mistake already made once.
 | Work done on another machine wasn't on GitHub | Never pushed | Push branches; check `git ls-remote` before starting |
 | `env-safeguards` branched from `main` | Started from the wrong base | Merged into `dev` cleanly; start new branches from `origin/dev` |
 | Cloud session can't open vendor sites (ShipBob, Cin7, Veeqo, Netlify-hosted pages) | Environment network policy | Owner signs up in their own browser; connectors are tested with mocked responses until real credentials exist |
+| Netlify builds broke on missing secrets; values pasted or imported in the Netlify UI silently didn't save | No check before the build | `scripts/check-env.mjs` runs first in every build; push secrets with `npm run env:push` and confirm the variable names in Netlify before deploying |
+| Same fix arrived twice (PR #1 to `main` and a merge to `dev`) | Two sessions changed one repo | App changes only in the designated session; other sessions report findings instead |
 | ShipBob sandbox sign-up refused; Veeqo has no API key section | Vendor gates API access | Email ShipBob support; ask Veeqo support to enable API access |
 
 ## Secrets
+
+- The repo is public. Never commit secret values, or notes on which site has or lacks which secret.
 
 - Never paste API keys or tokens in chat. Merchants enter warehouse credentials on the Warehouse page
   (stored encrypted); site secrets go through `npm run env:push` (see `docs/environment.md`).
