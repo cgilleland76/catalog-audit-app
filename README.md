@@ -42,6 +42,10 @@ Runs on **Netlify** (Functions) with **Netlify Database** (built-in Postgres), c
 
 Netlify environment variables to set yourself: `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL` (the Netlify site URL), `SCOPES` (`read_products,read_inventory`), `CREDENTIALS_KEY`.
 
+### Environment variables
+
+Required variables, the build-time check, `npm run env:push` and the `CREDENTIALS_KEY` caveat: [docs/environment.md](docs/environment.md).
+
 ## Dev and public apps
 
 Two Netlify sites build this one repo, each with its own Netlify Database:
