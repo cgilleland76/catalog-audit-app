@@ -66,7 +66,7 @@ export const FAQ: FaqEntry[] = [
   {
     question: "How do I connect a warehouse system?",
     answer:
-      "Open Warehouse and choose Connect next to your system. For ShipHero, paste an API refresh token (and your customer account ID if your warehouse is a 3PL). For ShipBob, paste a Personal Access Token from Integrations → API Tokens. For Cin7 Core, create an API application under Integrations → API and paste its Account ID and Application Key. For Veeqo, generate an API key from your user in Settings → Users and paste it. Then choose Test and connect. Tokens are stored encrypted, and you can connect more than one system.",
+      "Open Warehouse and choose Connect next to your system. For ShipHero, paste an API refresh token (and your customer account ID if your warehouse is a 3PL). For ShipBob, paste a Personal Access Token from Integrations → API Tokens. For Cin7 Core, create an API application under Integrations → API and paste its Account ID and Application Key. For Veeqo, go to Settings → Users, edit your user and choose Refresh API Key (if there's no API Key section, Veeqo support has to enable API access first). Then choose Test and connect. Tokens are stored encrypted, and you can connect more than one system.",
   },
   {
     question: "What happens to my data if I uninstall?",
