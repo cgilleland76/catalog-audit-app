@@ -17,7 +17,9 @@
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "typecheck": "react-router typegen && tsc --noEmit"
+    "typecheck": "react-router typegen && tsc --noEmit",
+    "env:check": "node --env-file-if-exists=.env scripts/check-env.mjs",
+    "env:push": "node scripts/env-push.mjs"
   },
   "type": "module",
   "engines": {

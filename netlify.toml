@@ -4,7 +4,7 @@
 [build]
   # The database is only available to the running app, which creates its own
   # tables on first start (app/lib/migrations.server.ts).
-  command = "npx prisma generate && npm run build"
+  command = "node scripts/check-env.mjs && npx prisma generate && npm run build"
   publish = "build/client"
 
 [build.environment]
