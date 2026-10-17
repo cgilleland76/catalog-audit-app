@@ -7,6 +7,15 @@ export type Update = {
   items: string[];
 };
 
+/** Planned features, shown above the release notes. Move to UPDATES when shipped. */
+export const UPCOMING: { title: string; description: string }[] = [
+  {
+    title: "Fix in Shopify, with Undo",
+    description:
+      "Pick the differences a warehouse comparison found and copy the warehouse's weight, cost or barcode into Shopify after a preview. Every fix is saved, and Undo puts the old values back.",
+  },
+];
+
 export const UPDATES: Update[] = [
   {
     date: "2026-10-16",

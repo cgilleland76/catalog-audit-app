@@ -1,7 +1,7 @@
 import type { MetaFunction } from "react-router";
 
 import { PublicPage, publicStyles as styles } from "../components/PublicPage";
-import { UPDATES } from "../lib/site-content";
+import { UPCOMING, UPDATES } from "../lib/site-content";
 
 export const meta: MetaFunction = () => [{ title: "Updates · SKU Doctor" }];
 
@@ -15,6 +15,17 @@ const formatDate = (iso: string) =>
 export default function Updates() {
   return (
     <PublicPage title="Updates" intro="What's new in SKU Doctor.">
+      {UPCOMING.length > 0 && (
+        <article className={styles.card}>
+          <div className={styles.meta}>Coming soon</div>
+          {UPCOMING.map((u) => (
+            <div key={u.title}>
+              <h2>{u.title}</h2>
+              <p>{u.description}</p>
+            </div>
+          ))}
+        </article>
+      )}
       {UPDATES.map((u) => (
         <article key={u.date + u.title} className={styles.card}>
           <div className={styles.meta}>{formatDate(u.date)}</div>

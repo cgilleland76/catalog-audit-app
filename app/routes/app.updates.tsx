@@ -2,7 +2,7 @@ import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { authenticate } from "../shopify.server";
-import { UPDATES } from "../lib/site-content";
+import { UPCOMING, UPDATES } from "../lib/site-content";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
@@ -19,6 +19,21 @@ const formatDate = (iso: string) =>
 export default function UpdatesPage() {
   return (
     <s-page heading="Updates">
+      {UPCOMING.length > 0 && (
+        <s-section heading="Coming soon">
+          <s-stack direction="block" gap="small">
+            {UPCOMING.map((u) => (
+              <s-stack key={u.title} direction="block" gap="small-200">
+                <s-stack direction="inline" gap="small" alignItems="center">
+                  <s-text type="strong">{u.title}</s-text>
+                  <s-badge tone="info">Upcoming</s-badge>
+                </s-stack>
+                <s-text>{u.description}</s-text>
+              </s-stack>
+            ))}
+          </s-stack>
+        </s-section>
+      )}
       {UPDATES.map((u) => (
         <s-section key={u.date + u.title} heading={u.title}>
           <s-stack direction="block" gap="small">
