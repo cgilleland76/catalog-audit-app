@@ -19,9 +19,10 @@ export const UPCOMING: { title: string; description: string }[] = [
 export const UPDATES: Update[] = [
   {
     date: "2026-10-17",
-    title: "Cin7 Core",
+    title: "Cin7 Core and Veeqo",
     items: [
       "Warehouse comparison now works with Cin7 Core: weight, barcode and cost (average cost, or the supplier price) are checked against Shopify.",
+      "Warehouse comparison now works with Veeqo: weight, barcode (UPC) and cost price are checked against Shopify.",
     ],
   },
   {
@@ -65,7 +66,7 @@ export const FAQ: FaqEntry[] = [
   {
     question: "How do I connect a warehouse system?",
     answer:
-      "Open Warehouse and choose Connect next to your system. For ShipHero, paste an API refresh token (and your customer account ID if your warehouse is a 3PL). For ShipBob, paste a Personal Access Token from Integrations → API Tokens. For Cin7 Core, create an API application under Integrations → API and paste its Account ID and Application Key. Then choose Test and connect. Tokens are stored encrypted, and you can connect more than one system.",
+      "Open Warehouse and choose Connect next to your system. For ShipHero, paste an API refresh token (and your customer account ID if your warehouse is a 3PL). For ShipBob, paste a Personal Access Token from Integrations → API Tokens. For Cin7 Core, create an API application under Integrations → API and paste its Account ID and Application Key. For Veeqo, generate an API key from your user in Settings → Users and paste it. Then choose Test and connect. Tokens are stored encrypted, and you can connect more than one system.",
   },
   {
     question: "What happens to my data if I uninstall?",

@@ -4,6 +4,7 @@ import type { CatalogRow } from "../catalog";
 import { shiphero } from "./shiphero.server";
 import { shipbob } from "./shipbob.server";
 import { cin7 } from "./cin7.server";
+import { veeqo } from "./veeqo.server";
 import type {
   Mismatch,
   WmsProduct,
@@ -17,6 +18,7 @@ export const PROVIDERS: Record<string, WmsProvider> = {
   [shiphero.id]: shiphero,
   [shipbob.id]: shipbob,
   [cin7.id]: cin7,
+  [veeqo.id]: veeqo,
 };
 
 export function getProvider(id: string): WmsProvider {
