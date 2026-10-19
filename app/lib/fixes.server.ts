@@ -115,6 +115,36 @@ export function variantInput(field: FixField, value: Value, node: VariantNode) {
   return { barcode: typeof value === "string" ? value : null };
 }
 
+const GRANTED_SCOPES = `#graphql
+  query GrantedScopes {
+    currentAppInstallation {
+      accessScopes {
+        handle
+      }
+    }
+  }
+`;
+
+/**
+ * Whether the shop has granted the permissions fixing needs. Asks Shopify,
+ * since the scopes saved with the session can be out of date after the app's
+ * permissions change (development stores grant new ones without a prompt).
+ */
+export async function canWriteProducts(admin: AdminApiContext) {
+  try {
+    const response = await admin.graphql(GRANTED_SCOPES);
+    const json = (await response.json()) as {
+      data?: { currentAppInstallation: { accessScopes: { handle: string }[] } };
+    };
+    const granted = new Set(
+      (json.data?.currentAppInstallation.accessScopes ?? []).map((s) => s.handle),
+    );
+    return granted.has("write_products") && granted.has("write_inventory");
+  } catch {
+    return false;
+  }
+}
+
 class Throttled extends Error {}
 
 async function gql<T>(admin: AdminApiContext, query: string, variables: Record<string, unknown>) {

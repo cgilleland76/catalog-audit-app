@@ -34,6 +34,7 @@ Read this before changing anything. Each entry is a mistake already made once.
 | Same fix arrived twice (PR #1 to `main` and a merge to `dev`) | Two sessions changed one repo | App changes only in the designated session; other sessions report findings instead |
 | Changing app permissions (scopes) | Scopes live in three places | Update both TOMLs, each site's `SCOPES` variable, then `shopify app deploy --config <toml>`; merchants approve the new permissions when they next open the app |
 | Shopify's docs/validator unreachable from the cloud session | Network policy | Connect the claude.ai Shopify connector to the dev store and run operations there (it validates against Shopify's schema); otherwise test against a fake store locally |
+| Fix showed "Permission needed" though the permissions were granted | The session's saved `scope` is from install time; development stores grant new scopes silently | Check granted scopes live with `currentAppInstallation { accessScopes }` (`canWriteProducts`) |
 | `productVariantsBulkUpdate` rejected every variant of a product when one change was invalid | `allowPartialUpdates` defaults to false | Pass `allowPartialUpdates: true`; Fix reads each change back to confirm it saved |
 | ShipBob sandbox sign-up refused; Veeqo has no API key section | Vendor gates API access | Email ShipBob support; ask Veeqo support to enable API access |
 

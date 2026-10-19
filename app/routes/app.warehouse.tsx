@@ -17,6 +17,7 @@ import {
   activeFix,
   advanceFix,
   batchRows,
+  canWriteProducts,
   createFixBatch,
   problemItems,
   recentFixes,
@@ -128,7 +129,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   ]);
   const withProblems = fixes.find((b) => b.failed > 0 || b.kept > 0);
   const problems = withProblems ? await problemItems(withProblems.id) : [];
-  const scopes = new Set((session.scope ?? "").split(","));
 
   return {
     locked: false as const,
@@ -137,7 +137,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     catalogCount: catalog.rows?.length ?? null,
     scannedAt: catalog.scannedAt,
     scan: catalog.scan,
-    canWrite: scopes.has("write_products") && scopes.has("write_inventory"),
+    canWrite: await canWriteProducts(admin),
     activeFix: active && { id: active.id, status: active.status, provider: active.provider },
     fixes: await batchRows(fixes),
     problems: problems.map((i) => ({
