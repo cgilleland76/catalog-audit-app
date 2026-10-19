@@ -62,8 +62,16 @@ export async function saveSyncSetting(
     frequency,
     fixFields: JSON.stringify(opts.fixFields),
     nextRunAt,
-    ...(opts.enabled ? {} : { stage: "idle", scanId: null, comparisonId: null, fixBatchId: null }),
+    ...(opts.enabled
+      ? {}
+      : { stage: "idle", runId: null, scanId: null, comparisonId: null, fixBatchId: null }),
   };
+  if (!opts.enabled && existing?.runId) {
+    await prisma.syncRun.updateMany({
+      where: { id: existing.runId, status: "running" },
+      data: { status: "skipped", message: "Scheduled sync was turned off", finishedAt: new Date() },
+    });
+  }
   return prisma.syncSetting.upsert({
     where: { shop_provider: { shop, provider } },
     create: { shop, provider, ...data },
@@ -73,15 +81,25 @@ export async function saveSyncSetting(
 
 type Setting = NonNullable<Awaited<ReturnType<typeof prisma.syncSetting.findUnique>>>;
 
-const finish = (
-  s: Setting,
-  status: "done" | "failed" | "skipped",
-  message: string,
-) =>
-  prisma.syncSetting.update({
+/** Ends the current run: logs it (see History) and schedules the next one. */
+async function finish(s: Setting, status: "done" | "failed" | "skipped", message: string) {
+  const run = {
+    status,
+    message,
+    comparisonId: s.comparisonId,
+    fixBatchId: s.fixBatchId,
+    finishedAt: new Date(),
+  };
+  if (s.runId) {
+    await prisma.syncRun.updateMany({ where: { id: s.runId }, data: run });
+  } else {
+    await prisma.syncRun.create({ data: { shop: s.shop, provider: s.provider, ...run } });
+  }
+  return prisma.syncSetting.update({
     where: { id: s.id },
     data: {
       stage: "idle",
+      runId: null,
       scanId: null,
       comparisonId: null,
       fixBatchId: null,
@@ -90,6 +108,7 @@ const finish = (
       nextRunAt: nextRun(s.frequency),
     },
   });
+}
 
 /**
  * Moves one sync run forward until it has to wait (for Shopify's export, the
@@ -125,9 +144,19 @@ export async function advanceSync(setting: Setting, until: number): Promise<void
         await finish(s, "failed", scan.error ?? "Couldn't read the Shopify catalog");
         return;
       }
+      const run = await prisma.syncRun.create({
+        data: { shop, provider: s.provider, status: "running" },
+      });
       s = await prisma.syncSetting.update({
         where: { id: s.id },
-        data: { stage: "scanning", scanId: scan.id, lastRunAt: new Date(), lastStatus: null, lastMessage: null },
+        data: {
+          stage: "scanning",
+          runId: run.id,
+          scanId: scan.id,
+          lastRunAt: run.startedAt,
+          lastStatus: null,
+          lastMessage: null,
+        },
       });
       continue;
     }
@@ -158,6 +187,10 @@ export async function advanceSync(setting: Setting, until: number): Promise<void
       s = await prisma.syncSetting.update({
         where: { id: s.id },
         data: { stage: "comparing", comparisonId },
+      });
+      await prisma.syncRun.updateMany({
+        where: { id: s.runId ?? "" },
+        data: { comparisonId },
       });
       continue;
     }
@@ -205,6 +238,10 @@ export async function advanceSync(setting: Setting, until: number): Promise<void
       s = await prisma.syncSetting.update({
         where: { id: s.id },
         data: { stage: "fixing", fixBatchId: created.batch.id },
+      });
+      await prisma.syncRun.updateMany({
+        where: { id: s.runId ?? "" },
+        data: { fixBatchId: created.batch.id },
       });
       continue;
     }
@@ -259,7 +296,8 @@ export async function runSync(budgetMs = 20_000) {
       report.push(`${setting.shop}/${setting.provider}: ok`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await finish(setting, "failed", message);
+      const current = await prisma.syncSetting.findUnique({ where: { id: setting.id } });
+      await finish(current ?? setting, "failed", message);
       report.push(`${setting.shop}/${setting.provider}: ${message}`);
     }
   }

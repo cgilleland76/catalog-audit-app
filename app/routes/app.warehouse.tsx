@@ -16,6 +16,7 @@ import { canUseWarehouse } from "../lib/plans";
 import {
   activeFix,
   advanceFix,
+  batchRows,
   createFixBatch,
   problemItems,
   recentFixes,
@@ -34,6 +35,7 @@ import {
 import { parseFields, saveSyncSetting } from "../lib/sync.server";
 import { UpgradeSection } from "../components/Upgrade";
 import { ScanBanner, useCatalogScan } from "../components/CatalogScan";
+import { fixStatus, fixSummary, hideModal } from "../components/fixes";
 import { downloadFile, numericId, toCsv } from "../lib/catalog";
 import {
   PROVIDERS,
@@ -127,7 +129,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const withProblems = fixes.find((b) => b.failed > 0 || b.kept > 0);
   const problems = withProblems ? await problemItems(withProblems.id) : [];
   const scopes = new Set((session.scope ?? "").split(","));
-  const undoCutoff = Date.now() - UNDO_DAYS * 86_400_000;
 
   return {
     locked: false as const,
@@ -138,19 +139,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     scan: catalog.scan,
     canWrite: scopes.has("write_products") && scopes.has("write_inventory"),
     activeFix: active && { id: active.id, status: active.status, provider: active.provider },
-    fixes: fixes.map((b) => ({
-      id: b.id,
-      source: b.source,
-      status: b.status,
-      total: b.total,
-      applied: b.applied,
-      failed: b.failed,
-      reverted: b.reverted,
-      kept: b.kept,
-      error: b.error,
-      createdAt: b.createdAt.toISOString(),
-      canUndo: b.status === "done" && b.applied > 0 && b.createdAt.getTime() > undoCutoff,
-    })),
+    fixes: await batchRows(fixes),
     problems: problems.map((i) => ({
       id: i.id,
       sku: i.sku,
@@ -254,7 +243,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "undo") {
-    const result = await startUndo(session.shop, String(form.get("batchId") ?? ""));
+    const result = await startUndo(session.shop, { batchId: String(form.get("batchId") ?? "") });
     if (result.error) return { ok: false, message: result.error };
     return { ok: true, message: "Undoing the fix" };
   }
@@ -793,7 +782,12 @@ function WarehouseComparison({
           <s-stack direction="block" gap="base">
             <s-text color="subdued">
               Each fix saves Shopify&apos;s old values. Undo puts them back for{" "}
-              {UNDO_DAYS} days, except values changed in Shopify since.
+              {UNDO_DAYS} days, except values changed in Shopify since. See every
+              change, and undo single ones, on the{" "}
+              <s-link onClick={() => navigate(`/app/history?provider=${provider.id}`)}>
+                History
+              </s-link>{" "}
+              page.
             </s-text>
             <s-table>
               <s-table-header-row>
@@ -810,13 +804,11 @@ function WarehouseComparison({
                       {b.source === "sync" ? " · scheduled" : ""}
                     </s-table-cell>
                     <s-table-cell>
-                      <s-badge tone={FIX_STATUS[b.status]?.tone ?? "neutral"}>
-                        {FIX_STATUS[b.status]?.label ?? b.status}
-                      </s-badge>
+                      <s-badge tone={fixStatus(b).tone}>{fixStatus(b).label}</s-badge>
                     </s-table-cell>
                     <s-table-cell>{fixSummary(b)}</s-table-cell>
                     <s-table-cell>
-                      {b.canUndo ? (
+                      {b.undoable > 0 ? (
                         <s-button
                           variant="tertiary"
                           commandFor="undo-modal"
@@ -927,27 +919,6 @@ function WarehouseComparison({
 
 type Compare = Extract<Loaded, { view: "compare" }>;
 type FixRow = Compare["fixes"][number];
-
-const FIX_STATUS: Record<string, { label: string; tone: "info" | "success" | "critical" | "neutral" | "warning" }> = {
-  applying: { label: "Fixing…", tone: "info" },
-  done: { label: "Fixed", tone: "success" },
-  failed: { label: "Failed", tone: "critical" },
-  undoing: { label: "Undoing…", tone: "info" },
-  undone: { label: "Undone", tone: "neutral" },
-};
-
-function fixSummary(b: FixRow) {
-  if (b.status === "applying") return `${b.applied.toLocaleString()} of ${b.total.toLocaleString()} done`;
-  if (b.status === "undoing") return `${b.reverted.toLocaleString()} of ${b.applied.toLocaleString()} restored`;
-  if (b.status === "failed") return b.error ?? "Stopped";
-  if (b.status === "undone") {
-    return `${b.reverted.toLocaleString()} restored` + (b.kept ? `, ${b.kept.toLocaleString()} left (changed since)` : "");
-  }
-  return `${b.applied.toLocaleString()} of ${b.total.toLocaleString()} values set` + (b.failed ? `, ${b.failed.toLocaleString()} failed` : "") + (b.error ? ` · ${b.error}` : "");
-}
-
-const hideModal = (id: string) =>
-  (document.getElementById(id) as (HTMLElement & { hideOverlay?: () => void }) | null)?.hideOverlay?.();
 
 const PREVIEW_ROWS = 25;
 
@@ -1076,7 +1047,7 @@ function UndoModal({ batch, providerId }: { batch: FixRow | null; providerId: st
     <s-modal id="undo-modal" heading="Undo this fix?">
       <s-paragraph>
         {batch
-          ? `Puts Shopify's old values back for the ${batch.applied.toLocaleString()} values this fix set on ${new Date(batch.createdAt).toLocaleString()}. Values changed in Shopify since then are left alone.`
+          ? `Puts Shopify's old values back for the ${batch.undoable.toLocaleString()} values this fix set on ${new Date(batch.createdAt).toLocaleString()} that aren't undone yet. Values changed in Shopify since then are left alone.`
           : "Choose a fix to undo."}
       </s-paragraph>
       <s-button

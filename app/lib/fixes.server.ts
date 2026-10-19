@@ -187,21 +187,47 @@ export async function createFixBatch(opts: {
   return { batch };
 }
 
-export async function startUndo(shop: string, batchId: string) {
+/**
+ * Starts undoing a whole batch, or just some of its changes (`itemIds`, which
+ * may span several batches). Each batch then undoes in steps.
+ */
+export async function startUndo(shop: string, target: { batchId: string } | { itemIds: string[] }) {
   const active = await prisma.fixBatch.findFirst({
     where: { shop, status: { in: ["applying", "undoing"] } },
   });
   if (active) return { error: "Another fix is still running; wait for it to finish." };
-  const updated = await prisma.fixBatch.updateMany({
+
+  const undoable = await prisma.fixBatch.findMany({
     where: {
-      id: batchId,
       shop,
       status: "done",
       createdAt: { gt: new Date(Date.now() - UNDO_DAYS * 86_400_000) },
+      ...("batchId" in target ? { id: target.batchId } : {}),
     },
+    select: { id: true },
+  });
+  const batchIds = undoable.map((b) => b.id);
+  const marked = await prisma.fixItem.updateMany({
+    where: {
+      shop,
+      batchId: { in: batchIds },
+      status: "applied",
+      ...("itemIds" in target ? { id: { in: target.itemIds } } : {}),
+    },
+    data: { status: "revert_pending" },
+  });
+  if (marked.count === 0) return { error: "Nothing here can be undone anymore." };
+
+  const touched = await prisma.fixItem.findMany({
+    where: { shop, batchId: { in: batchIds }, status: "revert_pending" },
+    distinct: ["batchId"],
+    select: { batchId: true },
+  });
+  await prisma.fixBatch.updateMany({
+    where: { id: { in: touched.map((t) => t.batchId) } },
     data: { status: "undoing", finishedAt: null },
   });
-  return updated.count ? {} : { error: "This fix can't be undone anymore." };
+  return { count: marked.count };
 }
 
 const STEP_MS = 6000;
@@ -298,7 +324,8 @@ async function recount(batchId: string) {
     groups.filter((g) => statuses.includes(g.status)).reduce((sum, g) => sum + g._count, 0);
   return {
     // Everything the fix set (or found already set), including what was later undone.
-    applied: n("applied", "unchanged", "reverted", "kept", "undo_failed"),
+    applied: n("applied", "revert_pending", "unchanged", "reverted", "kept", "undo_failed"),
+    stillApplied: n("applied"),
     failed: n("failed"),
     reverted: n("reverted"),
     kept: n("kept"),
@@ -332,7 +359,7 @@ export async function advanceFix(batchId: string, admin: AdminApiContext) {
   try {
     while (Date.now() + 2000 < deadline) {
       const items = await prisma.fixItem.findMany({
-        where: { batchId, status: undo ? "applied" : "pending" },
+        where: { batchId, status: undo ? "revert_pending" : "pending" },
         orderBy: { id: "asc" },
         take: CHUNK,
       });
@@ -349,6 +376,13 @@ export async function advanceFix(batchId: string, admin: AdminApiContext) {
 
   if (changed.length) await updateSavedCopies(batch.shop, batch.comparisonId, changed, undo);
 
+  if (undo && error) {
+    // Changes not undone yet stay applied, so they can be undone again later.
+    await prisma.fixItem.updateMany({
+      where: { batchId, status: "revert_pending" },
+      data: { status: "applied" },
+    });
+  }
   const counts = await recount(batchId);
   await prisma.fixBatch.update({
     where: { id: batchId },
@@ -362,7 +396,9 @@ export async function advanceFix(batchId: string, admin: AdminApiContext) {
         ? { status: undo ? "done" : "failed", error, finishedAt: new Date() }
         : finished
           ? undo
-            ? { status: "undone", undoneAt: new Date(), finishedAt: new Date() }
+            ? counts.stillApplied > 0
+              ? { status: "done", undoneAt: new Date(), finishedAt: new Date() } // partly undone
+              : { status: "undone", undoneAt: new Date(), finishedAt: new Date() }
             : { status: "done", finishedAt: new Date() }
           : {}),
     },
@@ -428,20 +464,36 @@ async function updateSavedCopies(
 export const activeFix = (shop: string) =>
   prisma.fixBatch.findFirst({ where: { shop, status: { in: ["applying", "undoing"] } } });
 
-/** Recent batches for one warehouse system, after deleting expired ones. */
-export async function recentFixes(shop: string, provider: string) {
+/**
+ * History is kept for UNDO_DAYS: older fixes (no longer undoable), scheduled
+ * run logs and comparisons are deleted, except each system's latest comparison.
+ */
+export async function pruneHistory(shop: string) {
   const cutoff = new Date(Date.now() - UNDO_DAYS * 86_400_000);
   const old = await prisma.fixBatch.findMany({
     where: { shop, createdAt: { lt: cutoff } },
     select: { id: true },
   });
-  if (old.length) {
-    const ids = old.map((b) => b.id);
-    await prisma.$transaction([
-      prisma.fixItem.deleteMany({ where: { batchId: { in: ids } } }),
-      prisma.fixBatch.deleteMany({ where: { id: { in: ids } } }),
-    ]);
-  }
+  const latest = await prisma.wmsComparison.findMany({
+    where: { shop },
+    orderBy: { startedAt: "desc" },
+    distinct: ["provider"],
+    select: { id: true },
+  });
+  const ids = old.map((b) => b.id);
+  await prisma.$transaction([
+    prisma.fixItem.deleteMany({ where: { batchId: { in: ids } } }),
+    prisma.fixBatch.deleteMany({ where: { id: { in: ids } } }),
+    prisma.syncRun.deleteMany({ where: { shop, startedAt: { lt: cutoff } } }),
+    prisma.wmsComparison.deleteMany({
+      where: { shop, startedAt: { lt: cutoff }, id: { notIn: latest.map((c) => c.id) } },
+    }),
+  ]);
+}
+
+/** Recent batches for one warehouse system, after pruning expired history. */
+export async function recentFixes(shop: string, provider: string) {
+  await pruneHistory(shop);
   return prisma.fixBatch.findMany({
     where: { shop, provider },
     orderBy: { createdAt: "desc" },
@@ -455,3 +507,36 @@ export const problemItems = (batchId: string) =>
     where: { batchId, status: { in: ["failed", "kept", "undo_failed"] } },
     take: 50,
   });
+
+type Batch = Awaited<ReturnType<typeof prisma.fixBatch.findMany>>[number];
+
+/** Batches as pages show them, with how many changes can still be undone. */
+export async function batchRows(batches: Batch[]) {
+  const ids = batches.map((b) => b.id);
+  const still = ids.length
+    ? await prisma.fixItem.groupBy({
+        by: ["batchId"],
+        where: { batchId: { in: ids }, status: "applied" },
+        _count: true,
+      })
+    : [];
+  const cutoff = Date.now() - UNDO_DAYS * 86_400_000;
+  return batches.map((b) => {
+    const undoable = still.find((g) => g.batchId === b.id)?._count ?? 0;
+    return {
+      id: b.id,
+      provider: b.provider,
+      comparisonId: b.comparisonId,
+      source: b.source,
+      status: b.status,
+      total: b.total,
+      applied: b.applied,
+      failed: b.failed,
+      reverted: b.reverted,
+      kept: b.kept,
+      error: b.error,
+      createdAt: b.createdAt.toISOString(),
+      undoable: b.status === "done" && b.createdAt.getTime() > cutoff ? undoable : 0,
+    };
+  });
+}

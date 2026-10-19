@@ -24,6 +24,7 @@ export const PLANS: Record<
       "Warehouse comparison (ShipHero, more coming)",
       "Fix in Shopify with Undo",
       "Scheduled sync",
+      "History of every change",
     ],
   },
 };

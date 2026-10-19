@@ -12,6 +12,7 @@ export async function deleteShopData(shop: string) {
     db.fixItem.deleteMany({ where: { shop } }),
     db.fixBatch.deleteMany({ where: { shop } }),
     db.syncSetting.deleteMany({ where: { shop } }),
+    db.syncRun.deleteMany({ where: { shop } }),
     db.wmsConnection.deleteMany({ where: { shop } }),
     db.session.deleteMany({ where: { shop } }),
   ]);

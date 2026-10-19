@@ -13,10 +13,11 @@ export const UPCOMING: { title: string; description: string }[] = [];
 export const UPDATES: Update[] = [
   {
     date: "2026-10-19",
-    title: "Fix in Shopify, Undo and scheduled sync",
+    title: "Fix in Shopify, Undo, scheduled sync and History",
     items: [
       "Fix in Shopify: after a warehouse comparison, choose weight, cost and/or barcode, preview the changes and copy your warehouse's values into Shopify.",
-      "Undo: every fix saves Shopify's old values for 90 days. Undo puts them back, leaving alone anything changed in Shopify since.",
+      "Undo: every fix saves Shopify's old values for 90 days. Undo puts them back for a whole run or just the changes you select, leaving alone anything changed in Shopify since.",
+      "History: a new page listing every comparison and fix, manual or scheduled, and every value SKU Doctor changed (before and after), with CSV export.",
       "Scheduled sync: compare with your warehouse every 6 hours, daily or weekly, even when SKU Doctor isn't open, and optionally fix chosen fields automatically.",
       "SKU Doctor now asks for permission to edit products and inventory items, which fixing needs. It still changes nothing unless you choose Fix or set up a scheduled sync that fixes.",
     ],

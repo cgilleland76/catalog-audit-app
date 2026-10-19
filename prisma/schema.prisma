@@ -151,8 +151,25 @@ model SyncSetting {
   lastRunAt    DateTime?
   lastStatus   String? // done | failed | skipped
   lastMessage  String?
+  runId        String? // the SyncRun in progress
   updatedAt    DateTime  @updatedAt
 
   @@unique([shop, provider])
   @@index([enabled, nextRunAt])
+}
+
+// One scheduled sync run, for the History page (including runs that were
+// skipped or failed before a comparison started).
+model SyncRun {
+  id           String    @id @default(cuid())
+  shop         String
+  provider     String
+  status       String // running | done | failed | skipped
+  message      String?
+  comparisonId String?
+  fixBatchId   String?
+  startedAt    DateTime  @default(now())
+  finishedAt   DateTime?
+
+  @@index([shop, startedAt])
 }

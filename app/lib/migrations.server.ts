@@ -192,6 +192,33 @@ ALTER TABLE "FixItem" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "SyncSetting" ENABLE ROW LEVEL SECURITY;
 `,
   },
+  {
+    name: "20261019180000_sync_runs",
+    sql: `
+-- AlterTable
+ALTER TABLE "SyncSetting" ADD COLUMN     "runId" TEXT;
+
+-- CreateTable
+CREATE TABLE "SyncRun" (
+    "id" TEXT NOT NULL,
+    "shop" TEXT NOT NULL,
+    "provider" TEXT NOT NULL,
+    "status" TEXT NOT NULL,
+    "message" TEXT,
+    "comparisonId" TEXT,
+    "fixBatchId" TEXT,
+    "startedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "finishedAt" TIMESTAMP(3),
+
+    CONSTRAINT "SyncRun_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE INDEX "SyncRun_shop_startedAt_idx" ON "SyncRun"("shop", "startedAt");
+
+ALTER TABLE "SyncRun" ENABLE ROW LEVEL SECURITY;
+`,
+  },
 ];
 
 const statements = (sql: string) =>

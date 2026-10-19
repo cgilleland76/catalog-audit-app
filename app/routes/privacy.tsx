@@ -37,8 +37,8 @@ export default function Privacy() {
           </li>
           <li>
             If you use Fix in Shopify or scheduled sync: each changed value and
-            the value it replaced (kept for 90 days so it can be undone), and
-            your schedule settings.
+            the value it replaced, and a log of comparison and sync runs (kept
+            for 90 days so changes can be undone), and your schedule settings.
           </li>
         </ul>
         <p>
