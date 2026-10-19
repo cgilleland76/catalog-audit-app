@@ -12,6 +12,17 @@ export const UPCOMING: { title: string; description: string }[] = [];
 
 export const UPDATES: Update[] = [
   {
+    date: "2026-10-20",
+    title: "Large catalogs, plan limits and the active/draft filter",
+    items: [
+      "Catalogs of any size: SKU Doctor now saves your catalog one variant at a time and reads it in small steps, so pages load quickly even with hundreds of thousands of variants.",
+      "Plan limits: Free covers up to 500 active and draft variants, Pro up to 10,000 and Warehouse up to 100,000. Larger catalogs are audited and compared up to the limit.",
+      "Archived products are no longer read, audited or compared. If one becomes active or draft again, the next scan picks it up.",
+      "Warehouse comparisons and scheduled syncs can cover active products only, or active and draft products.",
+      "Scheduled syncs now run in the background for each store, so long runs finish without the app open.",
+    ],
+  },
+  {
     date: "2026-10-19",
     title: "Fix in Shopify, Undo, scheduled sync and History",
     items: [
