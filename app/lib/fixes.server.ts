@@ -40,7 +40,13 @@ const CURRENT_VALUES = `#graphql
 
 const UPDATE_VARIANTS = `#graphql
   mutation FixVariants($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-    productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+    # Without allowPartialUpdates, one rejected variant blocks every change to
+    # the product; each change is read back afterwards either way.
+    productVariantsBulkUpdate(
+      productId: $productId
+      variants: $variants
+      allowPartialUpdates: true
+    ) {
       productVariants {
         id
       }
