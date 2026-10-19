@@ -11,7 +11,7 @@ database URL by hand on Netlify.
 | `SHOPIFY_API_KEY` | yes | Client ID of the site's Shopify app |
 | `SHOPIFY_API_SECRET` | yes | Client secret. Secret |
 | `SHOPIFY_APP_URL` | yes | The site's URL |
-| `SCOPES` | yes | Must match the app's TOML |
+| `SCOPES` | yes | Must match the app's TOML: `read_products,write_products,read_inventory,write_inventory` |
 | `SHOPIFY_APP_HANDLE` | no | Defaults to `sku-doctor-app`; used for the plan-selection link |
 | `SUPPORT_EMAIL` | no | Defaults to `support@thirdaxiscustoms.com` |
 | `PLAN_OVERRIDE` | dev only | Fixes the plan on the dev app (no App Store pricing there) |

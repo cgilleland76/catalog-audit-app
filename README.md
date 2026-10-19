@@ -14,7 +14,7 @@ An embedded Shopify app with two tools:
 
 - **Warehouse comparison** — connect your WMS (ShipHero today) and check every Shopify SKU against it: weight, cost and barcode differences, plus SKUs the warehouse doesn't know. Runs in the background; results can be exported as CSV. Kits without their own weight or cost use the sum of their components.
 
-The app is read-only: it requests `read_products` and `read_inventory` and never changes your catalog.
+Scopes: `read_products,write_products,read_inventory,write_inventory`. The app changes products only through Fix in Shopify or a scheduled sync the merchant sets to fix (weight, cost, barcode), and keeps old values for Undo.
 
 ## Plans and billing
 
@@ -40,7 +40,7 @@ Runs on **Netlify** (Functions) with **Netlify Database** (built-in Postgres), c
 - Netlify only gives the running app the database address, not the build, so the app creates and updates its own tables on its first request in each instance (`app/lib/migrations.server.ts`, guarded by an advisory lock). `netlify.toml` builds the app and bundles Prisma's Linux engine.
 - Netlify Functions stop after a few seconds, so long work advances in steps while a page is open: catalog scans finish when a page checks on them, and ShipHero comparisons look up the next SKUs on each step (`advanceComparison`).
 
-Netlify environment variables to set yourself: `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL` (the Netlify site URL), `SCOPES` (`read_products,read_inventory`), `CREDENTIALS_KEY`.
+Netlify environment variables to set yourself: `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_APP_URL` (the Netlify site URL), `SCOPES` (`read_products,write_products,read_inventory,write_inventory`), `CREDENTIALS_KEY`.
 
 ### Environment variables
 

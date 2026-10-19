@@ -89,3 +89,70 @@ model CatalogScan {
 
   @@index([shop, startedAt])
 }
+
+// Changes SKU Doctor wrote to Shopify from a warehouse comparison, kept so
+// they can be undone. Applying and undoing advance in steps, like comparisons.
+model FixBatch {
+  id           String    @id @default(cuid())
+  shop         String
+  provider     String
+  comparisonId String?
+  source       String // manual | sync
+  status       String // applying | done | failed | undoing | undone
+  total        Int       @default(0)
+  applied      Int       @default(0)
+  failed       Int       @default(0)
+  reverted     Int       @default(0)
+  kept         Int       @default(0) // not undone: changed in Shopify since
+  error        String?
+  lockedUntil  DateTime?
+  createdAt    DateTime  @default(now())
+  finishedAt   DateTime?
+  undoneAt     DateTime?
+
+  @@index([shop, provider, createdAt])
+}
+
+// One field of one variant in a FixBatch. Values are JSON: weight
+// { value, unit } (newValue { lb }), cost number, barcode string; null = empty.
+model FixItem {
+  id        String  @id @default(cuid())
+  shop      String
+  batchId   String
+  variantId String
+  productId String
+  sku       String
+  label     String
+  field     String // weight | cost | barcode
+  newValue  String
+  oldValue  String? // Shopify's value just before the change
+  status    String  @default("pending") // pending | applied | unchanged | failed | reverted | kept | undo_failed
+  error     String?
+
+  @@index([batchId, status])
+  @@index([shop])
+}
+
+// Scheduled sync for one warehouse connection: re-read the catalog, compare,
+// and optionally fix chosen fields in Shopify. Run by a Netlify scheduled
+// function (netlify/functions/scheduled-sync.mjs → /internal/sync).
+model SyncSetting {
+  id           String    @id @default(cuid())
+  shop         String
+  provider     String
+  enabled      Boolean   @default(false)
+  frequency    String    @default("daily") // 6h | daily | weekly
+  fixFields    String    @default("[]") // JSON array of weight | cost | barcode
+  stage        String    @default("idle") // idle | scanning | comparing | fixing
+  scanId       String?
+  comparisonId String?
+  fixBatchId   String?
+  nextRunAt    DateTime?
+  lastRunAt    DateTime?
+  lastStatus   String? // done | failed | skipped
+  lastMessage  String?
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([shop, provider])
+  @@index([enabled, nextRunAt])
+}

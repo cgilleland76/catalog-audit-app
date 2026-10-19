@@ -143,7 +143,7 @@ export const shipbob: WmsProvider = {
       key: "token",
       label: "Personal Access Token",
       secret: true,
-      helpText: "Stored encrypted. Read-only use: SKU Doctor only reads products.",
+      helpText: "Stored encrypted. SKU Doctor only reads products from your warehouse.",
     },
     {
       key: "environment",

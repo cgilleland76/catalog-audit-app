@@ -11,15 +11,18 @@ export const loader = () => ({ email: supportEmail() });
 export default function Privacy() {
   const { email } = useLoaderData<typeof loader>();
   return (
-    <PublicPage title="Privacy policy" intro="Last updated October 15, 2026">
+    <PublicPage title="Privacy policy" intro="Last updated October 19, 2026">
       <section className={styles.card}>
         <h2>What SKU Doctor accesses</h2>
         <p>
           SKU Doctor reads your store’s products and inventory items (titles,
           SKUs, barcodes, prices, costs, weights, inventory quantities, tags,
           vendors and product images) to audit your catalog and build line
-          sheets. It requests read-only access and never changes your products.
-          It does not access customer or order information.
+          sheets. It changes products only when you choose to: when you use
+          Fix in Shopify, or turn on a scheduled sync that fixes values, it
+          sets the weights, costs or barcodes you selected from your warehouse
+          system, and keeps the old values so you can undo the change. It does
+          not access customer or order information.
         </p>
       </section>
 
@@ -31,6 +34,11 @@ export default function Privacy() {
           <li>
             If you connect a warehouse system such as ShipHero: its API
             credentials, encrypted, and the results of your comparisons.
+          </li>
+          <li>
+            If you use Fix in Shopify or scheduled sync: each changed value and
+            the value it replaced (kept for 90 days so it can be undone), and
+            your schedule settings.
           </li>
         </ul>
         <p>

@@ -80,7 +80,7 @@ export const veeqo: WmsProvider = {
       key: "apiKey",
       label: "API key",
       secret: true,
-      helpText: "Stored encrypted. SKU Doctor only reads products.",
+      helpText: "Stored encrypted. SKU Doctor only reads products from your warehouse.",
     },
   ],
 

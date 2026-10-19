@@ -108,6 +108,90 @@ ALTER TABLE "CatalogScan" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "WmsComparison" ADD COLUMN "cursor" TEXT;
 `,
   },
+  {
+    name: "20261019120000_fixes_and_sync",
+    sql: `
+-- CreateTable
+CREATE TABLE "FixBatch" (
+    "id" TEXT NOT NULL,
+    "shop" TEXT NOT NULL,
+    "provider" TEXT NOT NULL,
+    "comparisonId" TEXT,
+    "source" TEXT NOT NULL,
+    "status" TEXT NOT NULL,
+    "total" INTEGER NOT NULL DEFAULT 0,
+    "applied" INTEGER NOT NULL DEFAULT 0,
+    "failed" INTEGER NOT NULL DEFAULT 0,
+    "reverted" INTEGER NOT NULL DEFAULT 0,
+    "kept" INTEGER NOT NULL DEFAULT 0,
+    "error" TEXT,
+    "lockedUntil" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "finishedAt" TIMESTAMP(3),
+    "undoneAt" TIMESTAMP(3),
+
+    CONSTRAINT "FixBatch_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "FixItem" (
+    "id" TEXT NOT NULL,
+    "shop" TEXT NOT NULL,
+    "batchId" TEXT NOT NULL,
+    "variantId" TEXT NOT NULL,
+    "productId" TEXT NOT NULL,
+    "sku" TEXT NOT NULL,
+    "label" TEXT NOT NULL,
+    "field" TEXT NOT NULL,
+    "newValue" TEXT NOT NULL,
+    "oldValue" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'pending',
+    "error" TEXT,
+
+    CONSTRAINT "FixItem_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "SyncSetting" (
+    "id" TEXT NOT NULL,
+    "shop" TEXT NOT NULL,
+    "provider" TEXT NOT NULL,
+    "enabled" BOOLEAN NOT NULL DEFAULT false,
+    "frequency" TEXT NOT NULL DEFAULT 'daily',
+    "fixFields" TEXT NOT NULL DEFAULT '[]',
+    "stage" TEXT NOT NULL DEFAULT 'idle',
+    "scanId" TEXT,
+    "comparisonId" TEXT,
+    "fixBatchId" TEXT,
+    "nextRunAt" TIMESTAMP(3),
+    "lastRunAt" TIMESTAMP(3),
+    "lastStatus" TEXT,
+    "lastMessage" TEXT,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "SyncSetting_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE INDEX "FixBatch_shop_provider_createdAt_idx" ON "FixBatch"("shop", "provider", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "FixItem_batchId_status_idx" ON "FixItem"("batchId", "status");
+
+-- CreateIndex
+CREATE INDEX "FixItem_shop_idx" ON "FixItem"("shop");
+
+-- CreateIndex
+CREATE INDEX "SyncSetting_enabled_nextRunAt_idx" ON "SyncSetting"("enabled", "nextRunAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "SyncSetting_shop_provider_key" ON "SyncSetting"("shop", "provider");
+
+ALTER TABLE "FixBatch" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "FixItem" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "SyncSetting" ENABLE ROW LEVEL SECURITY;
+`,
+  },
 ];
 
 const statements = (sql: string) =>

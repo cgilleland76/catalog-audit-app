@@ -72,4 +72,6 @@ export type Mismatch = {
   sku: string;
   shopify: string;
   wms: string;
+  /** The warehouse's value, for fixing Shopify: pounds, cost, or barcode. */
+  target?: number | string;
 };

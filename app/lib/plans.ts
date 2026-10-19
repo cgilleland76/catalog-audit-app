@@ -22,6 +22,8 @@ export const PLANS: Record<
     features: [
       "Everything in Pro",
       "Warehouse comparison (ShipHero, more coming)",
+      "Fix in Shopify with Undo",
+      "Scheduled sync",
     ],
   },
 };

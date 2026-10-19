@@ -17,7 +17,7 @@ Read this before changing anything. Each entry is a mistake already made once.
 
 | Issue | Cause | Resolution |
 |---|---|---|
-| "Access denied for productVariants" | `shopify app` CLI rewrote the TOML and dropped `scopes` | Scopes are `read_products,read_inventory` in both TOMLs; check after any CLI config change |
+| "Access denied for productVariants" | `shopify app` CLI rewrote the TOML and dropped `scopes` | Scopes are `read_products,write_products,read_inventory,write_inventory` in both TOMLs and in each site's `SCOPES`; check after any CLI config change |
 | TOML parse error after a pull | Merge-conflict markers (`<<<<<<<`, `>>>>>>>`) left in `shopify.app.toml` | Remove markers; parse the TOML before committing |
 | Pages time out on big catalogs | Reading products in one request exceeded the 100 s limit | Catalog is read with a Shopify bulk operation and a progress banner; never block a page on a full catalog read |
 | Blank or template landing page | Template placeholder routes and `application_url` | Replaced; `/` redirects into the app when `shop`/`host`/`embedded` params are present |
@@ -32,6 +32,8 @@ Read this before changing anything. Each entry is a mistake already made once.
 | Cloud session can't open vendor sites (ShipBob, Cin7, Veeqo, Netlify-hosted pages) | Environment network policy | Owner signs up in their own browser; connectors are tested with mocked responses until real credentials exist |
 | Netlify builds broke on missing secrets; values pasted or imported in the Netlify UI silently didn't save | No check before the build | `scripts/check-env.mjs` runs first in every build; push secrets with `npm run env:push` and confirm the variable names in Netlify before deploying |
 | Same fix arrived twice (PR #1 to `main` and a merge to `dev`) | Two sessions changed one repo | App changes only in the designated session; other sessions report findings instead |
+| Changing app permissions (scopes) | Scopes live in three places | Update both TOMLs, each site's `SCOPES` variable, then `shopify app deploy --config <toml>`; merchants approve the new permissions when they next open the app |
+| Shopify's docs/validator unreachable from the cloud session | Network policy | GraphQL is tested against a fake Shopify store locally; the dev store is the first real check |
 | ShipBob sandbox sign-up refused; Veeqo has no API key section | Vendor gates API access | Email ShipBob support; ask Veeqo support to enable API access |
 
 ## Secrets

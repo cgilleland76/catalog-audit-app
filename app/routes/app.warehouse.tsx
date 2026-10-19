@@ -13,6 +13,25 @@ import { authenticate } from "../shopify.server";
 import { catalogForPage, loadCatalog } from "../lib/catalog.server";
 import { getPlan, planSelectionUrl } from "../lib/plans.server";
 import { canUseWarehouse } from "../lib/plans";
+import {
+  activeFix,
+  advanceFix,
+  createFixBatch,
+  problemItems,
+  recentFixes,
+  startUndo,
+} from "../lib/fixes.server";
+import {
+  FIELD_LABEL,
+  FIX_FIELDS,
+  fixableField,
+  fixCounts,
+  FREQUENCIES,
+  UNDO_DAYS,
+  type FixField,
+  type Frequency,
+} from "../lib/fixes";
+import { parseFields, saveSyncSetting } from "../lib/sync.server";
 import { UpgradeSection } from "../components/Upgrade";
 import { ScanBanner, useCatalogScan } from "../components/CatalogScan";
 import { downloadFile, numericId, toCsv } from "../lib/catalog";
@@ -94,10 +113,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const provider = getProvider(param);
   const catalog = await catalogForPage(session.shop, admin);
-  const latest = await prisma.wmsComparison.findFirst({
-    where: { shop: session.shop, provider: provider.id },
-    orderBy: { startedAt: "desc" },
-  });
+  const [latest, fixes, active, sync] = await Promise.all([
+    prisma.wmsComparison.findFirst({
+      where: { shop: session.shop, provider: provider.id },
+      orderBy: { startedAt: "desc" },
+    }),
+    recentFixes(session.shop, provider.id),
+    activeFix(session.shop),
+    prisma.syncSetting.findUnique({
+      where: { shop_provider: { shop: session.shop, provider: provider.id } },
+    }),
+  ]);
+  const withProblems = fixes.find((b) => b.failed > 0 || b.kept > 0);
+  const problems = withProblems ? await problemItems(withProblems.id) : [];
+  const scopes = new Set((session.scope ?? "").split(","));
+  const undoCutoff = Date.now() - UNDO_DAYS * 86_400_000;
 
   return {
     locked: false as const,
@@ -106,6 +136,39 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     catalogCount: catalog.rows?.length ?? null,
     scannedAt: catalog.scannedAt,
     scan: catalog.scan,
+    canWrite: scopes.has("write_products") && scopes.has("write_inventory"),
+    activeFix: active && { id: active.id, status: active.status, provider: active.provider },
+    fixes: fixes.map((b) => ({
+      id: b.id,
+      source: b.source,
+      status: b.status,
+      total: b.total,
+      applied: b.applied,
+      failed: b.failed,
+      reverted: b.reverted,
+      kept: b.kept,
+      error: b.error,
+      createdAt: b.createdAt.toISOString(),
+      canUndo: b.status === "done" && b.applied > 0 && b.createdAt.getTime() > undoCutoff,
+    })),
+    problems: problems.map((i) => ({
+      id: i.id,
+      sku: i.sku,
+      label: i.label,
+      field: i.field as FixField,
+      status: i.status,
+      error: i.error,
+    })),
+    sync: {
+      enabled: sync?.enabled ?? false,
+      frequency: sync?.frequency ?? "daily",
+      fixFields: parseFields(sync?.fixFields),
+      stage: sync?.stage ?? "idle",
+      lastRunAt: sync?.lastRunAt?.toISOString() ?? null,
+      lastStatus: sync?.lastStatus ?? null,
+      lastMessage: sync?.lastMessage ?? null,
+      nextRunAt: sync?.nextRunAt?.toISOString() ?? null,
+    },
     comparison: latest && {
       id: latest.id,
       ...summarize(latest),
@@ -169,8 +232,49 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
   }
 
-  // Runs the next few seconds of a comparison; the page calls this while it
-  // polls, so a comparison only advances while the page is open.
+  if (intent === "fix") {
+    const fields = FIX_FIELDS.filter((f) =>
+      String(form.get("fields") ?? "").split(",").includes(f),
+    );
+    const comparison = await prisma.wmsComparison.findFirst({
+      where: { shop: session.shop, provider: provider.id, status: "done" },
+      orderBy: { startedAt: "desc" },
+    });
+    if (!comparison?.results) return { ok: false, message: "Run a comparison first" };
+    const created = await createFixBatch({
+      shop: session.shop,
+      provider: provider.id,
+      comparisonId: comparison.id,
+      results: JSON.parse(comparison.results) as Mismatch[],
+      fields,
+      source: "manual",
+    });
+    if (!created.batch) return { ok: false, message: created.error ?? "Nothing to fix" };
+    return { ok: true, message: `Fixing ${created.batch.total.toLocaleString()} values in Shopify` };
+  }
+
+  if (intent === "undo") {
+    const result = await startUndo(session.shop, String(form.get("batchId") ?? ""));
+    if (result.error) return { ok: false, message: result.error };
+    return { ok: true, message: "Undoing the fix" };
+  }
+
+  if (intent === "saveSync") {
+    await saveSyncSetting(session.shop, provider.id, {
+      enabled: form.get("enabled") === "true",
+      frequency: String(form.get("frequency") ?? "daily"),
+      fixFields: FIX_FIELDS.filter((f) =>
+        String(form.get("fixFields") ?? "").split(",").includes(f),
+      ),
+    });
+    return {
+      ok: true,
+      message: form.get("enabled") === "true" ? "Scheduled sync saved" : "Scheduled sync turned off",
+    };
+  }
+
+  // Runs the next few seconds of a comparison or fix; the page calls this
+  // while it polls. (Scheduled syncs advance on their own.)
   if (intent === "step") {
     const running = await prisma.wmsComparison.findFirst({
       where: { shop: session.shop, provider: provider.id, status: "running" },
@@ -180,6 +284,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         (await loadCatalog(session.shop))?.rows ?? null,
       );
     }
+    const fix = await activeFix(session.shop);
+    if (fix) await advanceFix(fix.id, admin);
     return { ok: true, message: "" };
   }
 
@@ -339,7 +445,7 @@ function WarehouseSystems({ systems }: Extract<Loaded, { view: "list" }>) {
               : `${connectedCount} of ${systems.length} systems connected`}
           </s-list-item>
           <s-list-item>Tokens are tested before they&apos;re saved, and stored encrypted</s-list-item>
-          <s-list-item>Read-only: nothing is changed in Shopify or your warehouse</s-list-item>
+          <s-list-item>Nothing changes in Shopify unless you choose Fix; your warehouse is never changed</s-list-item>
         </s-unordered-list>
       </s-section>
       <s-section slot="aside" heading="Need another system?">
@@ -434,6 +540,11 @@ function WarehouseComparison({
   catalogCount,
   scannedAt,
   scan: initialScan,
+  canWrite,
+  activeFix,
+  fixes,
+  problems,
+  sync,
 }: Extract<Loaded, { view: "compare" }>) {
   const catalogScan = useCatalogScan(initialScan, scannedAt);
   const catalogReady = catalogCount !== null;
@@ -447,6 +558,9 @@ function WarehouseComparison({
 
   const busy = fetcher.state !== "idle";
   const running = comparison?.status === "running";
+  // Comparisons and fixes advance only while something asks for the next step.
+  const stepping = running || activeFix !== null;
+  const [undoId, setUndoId] = useState<string | null>(null);
   const codes = CODES.filter((k) => k !== "cost_mismatch" || provider.comparesCost);
 
   useEffect(() => {
@@ -458,7 +572,7 @@ function WarehouseComparison({
   // While a comparison runs, keep asking the server to do the next step.
   // Each finished step re-runs the loader, which shows the new progress.
   useEffect(() => {
-    if (!running) return;
+    if (!stepping) return;
     const tick = () => {
       if (stepper.state === "idle") {
         stepper.submit({ intent: "step", provider: provider.id }, { method: "POST" });
@@ -467,7 +581,7 @@ function WarehouseComparison({
     tick();
     const timer = setInterval(tick, 2000);
     return () => clearInterval(timer);
-  }, [running, stepper, provider.id]);
+  }, [stepping, stepper, provider.id]);
 
   const results = useMemo(() => comparison?.results ?? [], [comparison]);
   const counts = useMemo(() => {
@@ -478,6 +592,10 @@ function WarehouseComparison({
     for (const m of results) c[m.code]++;
     return c;
   }, [results]);
+  const fixable = useMemo(
+    () => results.filter((m) => fixableField(m) !== null).length,
+    [results],
+  );
   const visible = useMemo(
     () => results.filter((m) => filter === "all" || m.code === filter),
     [results, filter],
@@ -586,11 +704,22 @@ function WarehouseComparison({
       {comparison?.status === "done" && (
         <s-section heading="Results">
           <s-stack direction="block" gap="base">
-            <s-text color="subdued">
-              {comparison.total.toLocaleString()} SKUs checked ·{" "}
-              {results.length.toLocaleString()} differences · finished{" "}
-              {new Date(comparison.finishedAt ?? comparison.startedAt).toLocaleString()}
-            </s-text>
+            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+              <s-text color="subdued">
+                {comparison.total.toLocaleString()} SKUs checked ·{" "}
+                {results.length.toLocaleString()} differences · finished{" "}
+                {new Date(comparison.finishedAt ?? comparison.startedAt).toLocaleString()}
+              </s-text>
+              {fixable > 0 && (
+                <s-button
+                  commandFor="fix-modal"
+                  command="--show"
+                  disabled={activeFix !== null}
+                >
+                  Fix in Shopify ({fixable.toLocaleString()})
+                </s-button>
+              )}
+            </s-stack>
             <s-stack direction="inline" gap="small-200">
               {codes.map((k) => (
                 <s-clickable-chip
@@ -659,6 +788,90 @@ function WarehouseComparison({
         </s-section>
       )}
 
+      {fixes.length > 0 && (
+        <s-section heading="Fix history">
+          <s-stack direction="block" gap="base">
+            <s-text color="subdued">
+              Each fix saves Shopify&apos;s old values. Undo puts them back for{" "}
+              {UNDO_DAYS} days, except values changed in Shopify since.
+            </s-text>
+            <s-table>
+              <s-table-header-row>
+                <s-table-header listSlot="primary">When</s-table-header>
+                <s-table-header listSlot="inline">Status</s-table-header>
+                <s-table-header listSlot="secondary">Result</s-table-header>
+                <s-table-header>Actions</s-table-header>
+              </s-table-header-row>
+              <s-table-body>
+                {fixes.map((b) => (
+                  <s-table-row key={b.id}>
+                    <s-table-cell>
+                      {new Date(b.createdAt).toLocaleString()}
+                      {b.source === "sync" ? " · scheduled" : ""}
+                    </s-table-cell>
+                    <s-table-cell>
+                      <s-badge tone={FIX_STATUS[b.status]?.tone ?? "neutral"}>
+                        {FIX_STATUS[b.status]?.label ?? b.status}
+                      </s-badge>
+                    </s-table-cell>
+                    <s-table-cell>{fixSummary(b)}</s-table-cell>
+                    <s-table-cell>
+                      {b.canUndo ? (
+                        <s-button
+                          variant="tertiary"
+                          commandFor="undo-modal"
+                          command="--show"
+                          disabled={activeFix !== null}
+                          onClick={() => setUndoId(b.id)}
+                        >
+                          Undo
+                        </s-button>
+                      ) : (
+                        "—"
+                      )}
+                    </s-table-cell>
+                  </s-table-row>
+                ))}
+              </s-table-body>
+            </s-table>
+            {problems.length > 0 && (
+              <s-stack direction="block" gap="small">
+                <s-heading>Not changed</s-heading>
+                <s-unordered-list>
+                  {problems.map((i) => (
+                    <s-list-item key={i.id}>
+                      {i.label} ({i.sku}), {FIELD_LABEL[i.field].toLowerCase()}:{" "}
+                      {i.error ?? "not changed"}
+                    </s-list-item>
+                  ))}
+                </s-unordered-list>
+              </s-stack>
+            )}
+          </s-stack>
+        </s-section>
+      )}
+
+      {comparison?.status === "done" && (
+        <FixModal
+          results={results}
+          providerId={provider.id}
+          providerName={provider.name}
+          canWrite={canWrite}
+        />
+      )}
+      <UndoModal
+        batch={fixes.find((b) => b.id === undoId) ?? null}
+        providerId={provider.id}
+      />
+
+      <SyncSettings
+        key={JSON.stringify(sync)}
+        sync={sync}
+        providerId={provider.id}
+        providerName={provider.name}
+        canWrite={canWrite}
+      />
+
       <s-section slot="aside" heading="Connection">
         <s-stack direction="block" gap="base">
           <s-badge tone="success">Connected to {provider.name}</s-badge>
@@ -702,10 +915,288 @@ function WarehouseComparison({
             <s-list-item key={note}>{note}</s-list-item>
           ))}
           <s-list-item>Archived products are skipped</s-list-item>
-          <s-list-item>Read-only: nothing is changed in either system</s-list-item>
+          <s-list-item>
+            Nothing changes in Shopify unless you choose Fix (or a scheduled
+            sync you set up does); {provider.name} is never changed
+          </s-list-item>
         </s-unordered-list>
       </s-section>
     </s-page>
+  );
+}
+
+type Compare = Extract<Loaded, { view: "compare" }>;
+type FixRow = Compare["fixes"][number];
+
+const FIX_STATUS: Record<string, { label: string; tone: "info" | "success" | "critical" | "neutral" | "warning" }> = {
+  applying: { label: "Fixing…", tone: "info" },
+  done: { label: "Fixed", tone: "success" },
+  failed: { label: "Failed", tone: "critical" },
+  undoing: { label: "Undoing…", tone: "info" },
+  undone: { label: "Undone", tone: "neutral" },
+};
+
+function fixSummary(b: FixRow) {
+  if (b.status === "applying") return `${b.applied.toLocaleString()} of ${b.total.toLocaleString()} done`;
+  if (b.status === "undoing") return `${b.reverted.toLocaleString()} of ${b.applied.toLocaleString()} restored`;
+  if (b.status === "failed") return b.error ?? "Stopped";
+  if (b.status === "undone") {
+    return `${b.reverted.toLocaleString()} restored` + (b.kept ? `, ${b.kept.toLocaleString()} left (changed since)` : "");
+  }
+  return `${b.applied.toLocaleString()} of ${b.total.toLocaleString()} values set` + (b.failed ? `, ${b.failed.toLocaleString()} failed` : "") + (b.error ? ` · ${b.error}` : "");
+}
+
+const hideModal = (id: string) =>
+  (document.getElementById(id) as (HTMLElement & { hideOverlay?: () => void }) | null)?.hideOverlay?.();
+
+const PREVIEW_ROWS = 25;
+
+/** Popout: choose which fields to copy from the warehouse, preview, apply. */
+function FixModal({
+  results,
+  providerId,
+  providerName,
+  canWrite,
+}: {
+  results: Mismatch[];
+  providerId: string;
+  providerName: string;
+  canWrite: boolean;
+}) {
+  const fetcher = useFetcher<typeof action>();
+  const shopify = useAppBridge();
+  const counts = useMemo(() => fixCounts(results), [results]);
+  const [fields, setFields] = useState<FixField[]>(() => FIX_FIELDS.filter((f) => counts[f] > 0));
+  const chosen = useMemo(
+    () => results.filter((m) => {
+      const field = fixableField(m);
+      return field !== null && fields.includes(field);
+    }),
+    [results, fields],
+  );
+  const busy = fetcher.state !== "idle";
+
+  useEffect(() => {
+    if (!fetcher.data) return;
+    shopify.toast.show(fetcher.data.message, { isError: !fetcher.data.ok });
+    if (fetcher.data.ok) hideModal("fix-modal");
+  }, [fetcher.data, shopify]);
+
+  return (
+    <s-modal id="fix-modal" heading="Fix in Shopify" size="large">
+      <s-stack direction="block" gap="base">
+        {!canWrite && (
+          <s-banner tone="warning" heading="Permission needed">
+            Fixing needs permission to edit products. Approve SKU Doctor&apos;s
+            updated permissions when Shopify asks, then reopen this page.
+          </s-banner>
+        )}
+        <s-paragraph>
+          Copy {providerName}&apos;s values into Shopify. SKU Doctor saves each
+          old value first, so you can undo this from Fix history.
+        </s-paragraph>
+        <s-stack direction="inline" gap="base">
+          {FIX_FIELDS.map((f) => (
+            <s-checkbox
+              key={f}
+              label={`${FIELD_LABEL[f]} (${counts[f].toLocaleString()})`}
+              checked={fields.includes(f)}
+              disabled={counts[f] === 0}
+              onChange={(e) => {
+                const on = e.currentTarget.checked;
+                setFields((list) => (on ? [...list, f] : list.filter((x) => x !== f)));
+              }}
+            />
+          ))}
+        </s-stack>
+        {chosen.length > 0 ? (
+          <s-table>
+            <s-table-header-row>
+              <s-table-header listSlot="primary">Product</s-table-header>
+              <s-table-header listSlot="secondary">SKU</s-table-header>
+              <s-table-header listSlot="inline">Field</s-table-header>
+              <s-table-header>Shopify now</s-table-header>
+              <s-table-header>Becomes</s-table-header>
+            </s-table-header-row>
+            <s-table-body>
+              {chosen.slice(0, PREVIEW_ROWS).map((m) => (
+                <s-table-row key={`${m.variantId}-${m.code}`}>
+                  <s-table-cell>{m.label}</s-table-cell>
+                  <s-table-cell>{m.sku}</s-table-cell>
+                  <s-table-cell>{FIELD_LABEL[fixableField(m)!]}</s-table-cell>
+                  <s-table-cell>{m.shopify}</s-table-cell>
+                  <s-table-cell>{m.wms}</s-table-cell>
+                </s-table-row>
+              ))}
+            </s-table-body>
+          </s-table>
+        ) : (
+          <s-paragraph>Choose at least one field.</s-paragraph>
+        )}
+        {chosen.length > PREVIEW_ROWS && (
+          <s-text color="subdued">
+            …and {(chosen.length - PREVIEW_ROWS).toLocaleString()} more. Export the
+            results (CSV) to see every change.
+          </s-text>
+        )}
+      </s-stack>
+      <s-button
+        slot="primary-action"
+        variant="primary"
+        disabled={!canWrite || chosen.length === 0}
+        onClick={() =>
+          fetcher.submit(
+            { intent: "fix", provider: providerId, fields: fields.join(",") },
+            { method: "POST" },
+          )
+        }
+        {...(busy ? { loading: true } : {})}
+      >
+        Fix {chosen.length.toLocaleString()} values
+      </s-button>
+      <s-button slot="secondary-actions" commandFor="fix-modal" command="--hide">
+        Cancel
+      </s-button>
+    </s-modal>
+  );
+}
+
+function UndoModal({ batch, providerId }: { batch: FixRow | null; providerId: string }) {
+  const fetcher = useFetcher<typeof action>();
+  const shopify = useAppBridge();
+  const busy = fetcher.state !== "idle";
+
+  useEffect(() => {
+    if (!fetcher.data) return;
+    shopify.toast.show(fetcher.data.message, { isError: !fetcher.data.ok });
+    if (fetcher.data.ok) hideModal("undo-modal");
+  }, [fetcher.data, shopify]);
+
+  return (
+    <s-modal id="undo-modal" heading="Undo this fix?">
+      <s-paragraph>
+        {batch
+          ? `Puts Shopify's old values back for the ${batch.applied.toLocaleString()} values this fix set on ${new Date(batch.createdAt).toLocaleString()}. Values changed in Shopify since then are left alone.`
+          : "Choose a fix to undo."}
+      </s-paragraph>
+      <s-button
+        slot="primary-action"
+        variant="primary"
+        tone="critical"
+        disabled={!batch}
+        onClick={() =>
+          batch &&
+          fetcher.submit(
+            { intent: "undo", provider: providerId, batchId: batch.id },
+            { method: "POST" },
+          )
+        }
+        {...(busy ? { loading: true } : {})}
+      >
+        Undo fix
+      </s-button>
+      <s-button slot="secondary-actions" commandFor="undo-modal" command="--hide">
+        Cancel
+      </s-button>
+    </s-modal>
+  );
+}
+
+/** Aside: run this comparison on a schedule, optionally fixing chosen fields. */
+function SyncSettings({
+  sync,
+  providerId,
+  providerName,
+  canWrite,
+}: {
+  sync: Compare["sync"];
+  providerId: string;
+  providerName: string;
+  canWrite: boolean;
+}) {
+  const fetcher = useFetcher<typeof action>();
+  const shopify = useAppBridge();
+  const [enabled, setEnabled] = useState(sync.enabled);
+  const [frequency, setFrequency] = useState(sync.frequency);
+  const [fields, setFields] = useState<FixField[]>(sync.fixFields);
+  const busy = fetcher.state !== "idle";
+
+  useEffect(() => {
+    if (fetcher.data) shopify.toast.show(fetcher.data.message, { isError: !fetcher.data.ok });
+  }, [fetcher.data, shopify]);
+
+  const status =
+    sync.stage !== "idle"
+      ? `Running now (${sync.stage === "scanning" ? "reading the catalog" : sync.stage})`
+      : sync.lastRunAt
+        ? `Last run ${new Date(sync.lastRunAt).toLocaleString()}${sync.lastMessage ? `: ${sync.lastMessage}` : ""}`
+        : null;
+
+  return (
+    <s-section slot="aside" heading="Scheduled sync">
+      <s-stack direction="block" gap="base">
+        <s-text color="subdued">
+          Re-reads your catalog and compares it with {providerName} on a schedule,
+          even when SKU Doctor isn&apos;t open.
+        </s-text>
+        <s-checkbox
+          label="Run on a schedule"
+          checked={enabled}
+          onChange={(e) => setEnabled(e.currentTarget.checked)}
+        />
+        <s-select
+          label="How often"
+          value={frequency}
+          disabled={!enabled}
+          onChange={(e) => setFrequency(e.currentTarget.value)}
+        >
+          {(Object.keys(FREQUENCIES) as Frequency[]).map((f) => (
+            <s-option key={f} value={f}>
+              {FREQUENCIES[f].label}
+            </s-option>
+          ))}
+        </s-select>
+        <s-stack direction="block" gap="small-200">
+          <s-text>Also fix in Shopify automatically:</s-text>
+          {FIX_FIELDS.map((f) => (
+            <s-checkbox
+              key={f}
+              label={FIELD_LABEL[f]}
+              checked={fields.includes(f)}
+              disabled={!enabled || !canWrite}
+              onChange={(e) => {
+                const on = e.currentTarget.checked;
+                setFields((list) => (on ? [...list, f] : list.filter((x) => x !== f)));
+              }}
+            />
+          ))}
+          <s-text color="subdued">
+            Automatic fixes appear in Fix history and can be undone.
+          </s-text>
+        </s-stack>
+        <s-button
+          onClick={() =>
+            fetcher.submit(
+              {
+                intent: "saveSync",
+                provider: providerId,
+                enabled: String(enabled),
+                frequency,
+                fixFields: fields.join(","),
+              },
+              { method: "POST" },
+            )
+          }
+          {...(busy ? { loading: true } : {})}
+        >
+          Save schedule
+        </s-button>
+        {status && <s-text color="subdued">{status}</s-text>}
+        {sync.enabled && sync.nextRunAt && sync.stage === "idle" && (
+          <s-text color="subdued">Next run {new Date(sync.nextRunAt).toLocaleString()}</s-text>
+        )}
+      </s-stack>
+    </s-section>
   );
 }
 

@@ -8,15 +8,19 @@ export type Update = {
 };
 
 /** Planned features, shown above the release notes. Move to UPDATES when shipped. */
-export const UPCOMING: { title: string; description: string }[] = [
-  {
-    title: "Fix in Shopify, with Undo",
-    description:
-      "Pick the differences a warehouse comparison found and copy the warehouse's weight, cost or barcode into Shopify after a preview. Every fix is saved, and Undo puts the old values back.",
-  },
-];
+export const UPCOMING: { title: string; description: string }[] = [];
 
 export const UPDATES: Update[] = [
+  {
+    date: "2026-10-19",
+    title: "Fix in Shopify, Undo and scheduled sync",
+    items: [
+      "Fix in Shopify: after a warehouse comparison, choose weight, cost and/or barcode, preview the changes and copy your warehouse's values into Shopify.",
+      "Undo: every fix saves Shopify's old values for 90 days. Undo puts them back, leaving alone anything changed in Shopify since.",
+      "Scheduled sync: compare with your warehouse every 6 hours, daily or weekly, even when SKU Doctor isn't open, and optionally fix chosen fields automatically.",
+      "SKU Doctor now asks for permission to edit products and inventory items, which fixing needs. It still changes nothing unless you choose Fix or set up a scheduled sync that fixes.",
+    ],
+  },
   {
     date: "2026-10-17",
     title: "Cin7 Core and Veeqo",
@@ -51,7 +55,7 @@ export const FAQ: FaqEntry[] = [
   {
     question: "Does SKU Doctor change my products?",
     answer:
-      "No. SKU Doctor only reads your catalog. Audits, line sheets and warehouse comparisons never change anything in Shopify or your warehouse system.",
+      "Only when you ask it to. Audits, line sheets and comparisons only read your catalog. Fix in Shopify (or a scheduled sync you set to fix) copies the weights, costs or barcodes you choose from your warehouse into Shopify, after keeping the old values so you can undo it. Your warehouse system is never changed.",
   },
   {
     question: "How long does a catalog scan take?",

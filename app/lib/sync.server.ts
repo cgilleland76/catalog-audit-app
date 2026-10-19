@@ -1,0 +1,267 @@
+import type { AdminApiContext } from "@shopify/shopify-app-react-router/server";
+
+import prisma from "../db.server";
+import { unauthenticated } from "../shopify.server";
+import { getScanState, loadCatalog, startScan } from "./catalog.server";
+import { FIX_FIELDS, FREQUENCIES, type FixField, type Frequency } from "./fixes";
+import { advanceFix, createFixBatch } from "./fixes.server";
+import { getPlan } from "./plans.server";
+import { canUseWarehouse } from "./plans";
+import {
+  advanceComparison,
+  createComparison,
+  getProvider,
+  loadCredentials,
+  PROVIDERS,
+} from "./wms/index.server";
+import type { Mismatch } from "./wms/types";
+
+// Scheduled sync: for each enabled warehouse connection that is due, read the
+// catalog again, compare it with the warehouse and, if chosen, fix the chosen
+// fields in Shopify (an undoable batch, like a manual fix). A Netlify scheduled
+// function calls runSync every few minutes; each call advances runs a little.
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** After a step that returned at once (another request holds its lock), wait a moment. */
+async function pauseIfIdle(startedAt: number) {
+  if (Date.now() - startedAt < 500) await sleep(1000);
+}
+
+const nextRun = (frequency: string, from = new Date()) =>
+  new Date(
+    from.getTime() + (FREQUENCIES[frequency as Frequency]?.hours ?? 24) * 3_600_000,
+  );
+
+export const parseFields = (raw: string | null | undefined): FixField[] => {
+  try {
+    const list = JSON.parse(raw ?? "[]") as string[];
+    return FIX_FIELDS.filter((f) => list.includes(f));
+  } catch {
+    return [];
+  }
+};
+
+export async function saveSyncSetting(
+  shop: string,
+  provider: string,
+  opts: { enabled: boolean; frequency: string; fixFields: FixField[] },
+) {
+  const frequency = opts.frequency in FREQUENCIES ? opts.frequency : "daily";
+  const existing = await prisma.syncSetting.findUnique({
+    where: { shop_provider: { shop, provider } },
+  });
+  // A newly enabled sync runs soon; a changed schedule counts from the last run.
+  const nextRunAt = !opts.enabled
+    ? null
+    : existing?.enabled && existing.lastRunAt
+      ? nextRun(frequency, existing.lastRunAt)
+      : new Date(Date.now() + 60_000);
+  const data = {
+    enabled: opts.enabled,
+    frequency,
+    fixFields: JSON.stringify(opts.fixFields),
+    nextRunAt,
+    ...(opts.enabled ? {} : { stage: "idle", scanId: null, comparisonId: null, fixBatchId: null }),
+  };
+  return prisma.syncSetting.upsert({
+    where: { shop_provider: { shop, provider } },
+    create: { shop, provider, ...data },
+    update: data,
+  });
+}
+
+type Setting = NonNullable<Awaited<ReturnType<typeof prisma.syncSetting.findUnique>>>;
+
+const finish = (
+  s: Setting,
+  status: "done" | "failed" | "skipped",
+  message: string,
+) =>
+  prisma.syncSetting.update({
+    where: { id: s.id },
+    data: {
+      stage: "idle",
+      scanId: null,
+      comparisonId: null,
+      fixBatchId: null,
+      lastStatus: status,
+      lastMessage: message,
+      nextRunAt: nextRun(s.frequency),
+    },
+  });
+
+/**
+ * Moves one sync run forward until it has to wait (for Shopify's export, the
+ * next comparison or fix step) or runs out of time.
+ */
+export async function advanceSync(setting: Setting, until: number): Promise<void> {
+  let s = setting;
+  const { shop } = s;
+
+  let admin: AdminApiContext;
+  try {
+    ({ admin } = await unauthenticated.admin(shop));
+  } catch {
+    await prisma.syncSetting.update({
+      where: { id: s.id },
+      data: { enabled: false, stage: "idle", lastStatus: "failed", lastMessage: "SKU Doctor is no longer installed" },
+    });
+    return;
+  }
+
+  while (Date.now() < until) {
+    if (s.stage === "idle") {
+      if (!PROVIDERS[s.provider] || !(await loadCredentials(shop, s.provider))) {
+        await finish(s, "skipped", "The warehouse system isn't connected");
+        return;
+      }
+      if (!canUseWarehouse(await getPlan(shop, admin))) {
+        await finish(s, "skipped", "Scheduled sync is part of the Warehouse plan");
+        return;
+      }
+      const scan = await startScan(shop, admin);
+      if (scan.status === "failed") {
+        await finish(s, "failed", scan.error ?? "Couldn't read the Shopify catalog");
+        return;
+      }
+      s = await prisma.syncSetting.update({
+        where: { id: s.id },
+        data: { stage: "scanning", scanId: scan.id, lastRunAt: new Date(), lastStatus: null, lastMessage: null },
+      });
+      continue;
+    }
+
+    if (s.stage === "scanning") {
+      await getScanState(shop, admin); // checks on the running export
+      const scan = s.scanId
+        ? await prisma.catalogScan.findUnique({ where: { id: s.scanId } })
+        : null;
+      if (scan?.status === "running") return; // Shopify is still exporting
+      if (scan?.status === "failed") {
+        await finish(s, "failed", scan.error ?? "Couldn't read the Shopify catalog");
+        return;
+      }
+      const running = await prisma.wmsComparison.findFirst({
+        where: { shop, provider: s.provider, status: "running" },
+      });
+      let comparisonId = running?.id;
+      if (!comparisonId) {
+        const catalog = await loadCatalog(shop);
+        if (!catalog) {
+          await finish(s, "failed", "Couldn't read the Shopify catalog");
+          return;
+        }
+        const live = catalog.rows.filter((r) => r.status !== "ARCHIVED");
+        comparisonId = (await createComparison(shop, getProvider(s.provider), live)).id;
+      }
+      s = await prisma.syncSetting.update({
+        where: { id: s.id },
+        data: { stage: "comparing", comparisonId },
+      });
+      continue;
+    }
+
+    if (s.stage === "comparing") {
+      if (!s.comparisonId) {
+        await finish(s, "failed", "Lost track of the comparison");
+        return;
+      }
+      const stepStart = Date.now();
+      await advanceComparison(s.comparisonId, async () => (await loadCatalog(shop))?.rows ?? null);
+      const comparison = await prisma.wmsComparison.findUnique({ where: { id: s.comparisonId } });
+      if (!comparison || comparison.status === "failed") {
+        await finish(s, "failed", comparison?.error ?? "The comparison failed");
+        return;
+      }
+      if (comparison.status === "running") {
+        await pauseIfIdle(stepStart);
+        continue;
+      }
+
+      const results = comparison.results ? (JSON.parse(comparison.results) as Mismatch[]) : [];
+      const fields = parseFields(s.fixFields);
+      if (fields.length === 0) {
+        await finish(s, "done", `${results.length.toLocaleString()} differences found`);
+        return;
+      }
+      const created = await createFixBatch({
+        shop,
+        provider: s.provider,
+        comparisonId: comparison.id,
+        results,
+        fields,
+        source: "sync",
+      });
+      if (!created.batch) {
+        // Nothing to fix, or a manual fix is running: report and try next time.
+        await finish(
+          s,
+          "done",
+          `${results.length.toLocaleString()} differences found; ${created.error ?? "nothing to fix"}`,
+        );
+        return;
+      }
+      s = await prisma.syncSetting.update({
+        where: { id: s.id },
+        data: { stage: "fixing", fixBatchId: created.batch.id },
+      });
+      continue;
+    }
+
+    if (s.stage === "fixing") {
+      if (!s.fixBatchId) {
+        await finish(s, "failed", "Lost track of the fix");
+        return;
+      }
+      const stepStart = Date.now();
+      await advanceFix(s.fixBatchId, admin);
+      const batch = await prisma.fixBatch.findUnique({ where: { id: s.fixBatchId } });
+      if (!batch || batch.status === "failed") {
+        await finish(s, "failed", batch?.error ?? "The fix failed");
+        return;
+      }
+      if (batch.status === "applying") {
+        await pauseIfIdle(stepStart);
+        continue;
+      }
+      await finish(
+        s,
+        "done",
+        `Fixed ${batch.applied.toLocaleString()} of ${batch.total.toLocaleString()} values in Shopify` +
+          (batch.failed ? ` (${batch.failed.toLocaleString()} failed)` : ""),
+      );
+      return;
+    }
+
+    await finish(s, "failed", `Unknown stage ${s.stage}`);
+    return;
+  }
+}
+
+/** Advances due and in-progress syncs for up to `budgetMs`. */
+export async function runSync(budgetMs = 20_000) {
+  const until = Date.now() + budgetMs;
+  const settings = await prisma.syncSetting.findMany({
+    where: {
+      enabled: true,
+      OR: [{ stage: { not: "idle" } }, { nextRunAt: { lte: new Date() } }],
+    },
+    orderBy: { nextRunAt: "asc" },
+    take: 25,
+  });
+  const report: string[] = [];
+  for (const setting of settings) {
+    // Leave room for one more comparison or fix step (about 6 seconds).
+    if (Date.now() > until - 7000) break;
+    try {
+      await advanceSync(setting, until - 7000);
+      report.push(`${setting.shop}/${setting.provider}: ok`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await finish(setting, "failed", message);
+      report.push(`${setting.shop}/${setting.provider}: ${message}`);
+    }
+  }
+  return report;
+}

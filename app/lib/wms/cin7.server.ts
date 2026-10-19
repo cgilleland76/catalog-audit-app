@@ -90,7 +90,7 @@ export const cin7: WmsProvider = {
       key: "applicationKey",
       label: "Application Key",
       secret: true,
-      helpText: "Stored encrypted. SKU Doctor only reads products.",
+      helpText: "Stored encrypted. SKU Doctor only reads products from your warehouse.",
     },
   ],
 

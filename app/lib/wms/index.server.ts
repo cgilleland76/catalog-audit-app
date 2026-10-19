@@ -60,7 +60,8 @@ export async function deleteCredentials(shop: string, provider: string) {
   await prisma.wmsConnection.deleteMany({ where: { shop, provider } });
 }
 
-const TO_LB: Record<string, number> = {
+/** Pounds per Shopify weight unit. */
+export const TO_LB: Record<string, number> = {
   POUNDS: 1,
   OUNCES: 1 / 16,
   GRAMS: 1 / 453.59237,
@@ -97,6 +98,7 @@ export function compareRows(
         code: "weight_mismatch",
         shopify: shopifyLb ? `${shopifyLb.toFixed(2)} lb` : "—",
         wms: `${w.weightLb.toFixed(2)} lb`,
+        target: w.weightLb,
       });
     }
 
@@ -106,11 +108,18 @@ export function compareRows(
         code: "cost_mismatch",
         shopify: r.cost === null ? "—" : `$${r.cost.toFixed(2)}`,
         wms: `$${w.cost.toFixed(2)}`,
+        target: w.cost,
       });
     }
 
     if (r.barcode && w.barcode && r.barcode !== w.barcode) {
-      out.push({ ...base, code: "barcode_mismatch", shopify: r.barcode, wms: w.barcode });
+      out.push({
+        ...base,
+        code: "barcode_mismatch",
+        shopify: r.barcode,
+        wms: w.barcode,
+        target: w.barcode,
+      });
     }
   }
   return out;
