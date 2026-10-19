@@ -88,11 +88,14 @@ const FIX_PREVIEW_ROWS = 25;
 const EXPORT_LIMIT = 25_000;
 
 /** The issue filter and how many rows to show, from the address. */
+/** "1 SKU", "2 SKUs". */
+const count = (n: number, noun: string) => `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
+
 function resultParams(request: Request) {
   const url = new URL(request.url);
   const issue = url.searchParams.get("issue");
   return {
-    issue: (issue && issue in MISMATCH_INFO ? issue : issue === "all" ? "all" : "weight_mismatch") as
+    issue: (issue && issue in MISMATCH_INFO ? issue : "all") as
       | MismatchCode
       | "all",
     limit: Math.min(Math.max(Number(url.searchParams.get("limit")) || PAGE_SIZE, PAGE_SIZE), 5000),
@@ -362,7 +365,7 @@ function comparisonSummary(
     return `Running — ${c.checked.toLocaleString()} of ${c.total.toLocaleString()} checked`;
   }
   if (c.status === "failed") return "Last comparison failed";
-  return `${c.differences.toLocaleString()} differences in ${c.total.toLocaleString()} SKUs · ${new Date(c.finishedAt ?? c.startedAt).toLocaleDateString()}`;
+  return `${count(c.differences, "difference")} in ${count(c.total, "SKU")} · ${new Date(c.finishedAt ?? c.startedAt).toLocaleDateString()}`;
 }
 
 function WarehouseSystems({ systems }: Extract<Loaded, { view: "list" }>) {
@@ -742,7 +745,7 @@ function WarehouseComparison({
             <s-spinner accessibilityLabel="Comparing" />
             <s-text>
               {comparison.stage === "compare"
-                ? `Comparing with what ${provider.name} returned; ${comparison.differences.toLocaleString()} differences so far.`
+                ? `Comparing with what ${provider.name} returned; ${count(comparison.differences, "difference")} so far.`
                 : comparison.checked === 0 && comparison.total > 0
                   ? `Reading products from ${provider.name} to check ${comparison.total.toLocaleString()} SKUs.`
                   : `Checked ${comparison.checked.toLocaleString()} of ${comparison.total.toLocaleString()} SKUs in ${provider.name}.`}{" "}
@@ -764,8 +767,8 @@ function WarehouseComparison({
           <s-stack direction="block" gap="base">
             <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
               <s-text color="subdued">
-                {comparison.total.toLocaleString()} SKUs checked ·{" "}
-                {differences.toLocaleString()} differences · finished{" "}
+                {count(comparison.total, "SKU")} checked · {count(differences, "difference")} ·
+                finished{" "}
                 {new Date(comparison.finishedAt ?? comparison.startedAt).toLocaleString()}
               </s-text>
               {fixable > 0 && (
