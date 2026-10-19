@@ -196,8 +196,7 @@ export const toVariantData = (shop: string, scanId: string, r: CatalogRow) => ({
   inventoryQuantity: r.inventoryQuantity,
 });
 
-export const fromVariant = (v: VariantRecord): CatalogRow & { rowId: bigint } => ({
-  rowId: v.id,
+export const variantRow = (v: VariantRecord): CatalogRow => ({
   variantId: v.variantId,
   variantTitle: v.variantTitle,
   productId: v.productId,
@@ -218,6 +217,34 @@ export const fromVariant = (v: VariantRecord): CatalogRow & { rowId: bigint } =>
   requiresShipping: v.requiresShipping,
   inventoryQuantity: v.inventoryQuantity,
 });
+
+export const fromVariant = (v: VariantRecord): CatalogRow & { rowId: bigint } => ({
+  ...variantRow(v),
+  rowId: v.id,
+});
+
+/**
+ * With a plan limit of `limit` variants: the id of the last variant covered,
+ * or null when the whole scan fits.
+ */
+export async function rowCap(scanId: string, limit: number): Promise<bigint | null> {
+  const rows = await prisma.catalogVariant.findMany({
+    where: { scanId },
+    orderBy: { id: "asc" },
+    skip: limit,
+    take: 1,
+    select: { id: true },
+  });
+  if (!rows.length) return null;
+  const last = await prisma.catalogVariant.findMany({
+    where: { scanId },
+    orderBy: { id: "asc" },
+    skip: limit - 1,
+    take: 1,
+    select: { id: true },
+  });
+  return last[0]?.id ?? null;
+}
 
 // Scans whose status is being checked right now in this instance, so two
 // callers don't ask Shopify twice. Scans advance only when something checks on
@@ -439,12 +466,18 @@ export const scopeStatuses = (scope: string) =>
 /** Variants of a scan in id order, `size` at a time, starting after `after`. */
 export async function variantPage(
   scanId: string,
-  opts: { after?: bigint; size?: number; statuses?: string[]; skuKeys?: string[] } = {},
+  opts: {
+    after?: bigint;
+    size?: number;
+    statuses?: string[];
+    skuKeys?: string[];
+    maxId?: bigint | null;
+  } = {},
 ) {
   const rows = await prisma.catalogVariant.findMany({
     where: {
       scanId,
-      id: { gt: opts.after ?? 0n },
+      id: { gt: opts.after ?? 0n, ...(opts.maxId ? { lte: opts.maxId } : {}) },
       ...(opts.statuses ? { status: { in: opts.statuses } } : {}),
       ...(opts.skuKeys ? { skuKey: { in: opts.skuKeys } } : {}),
     },
@@ -454,20 +487,6 @@ export async function variantPage(
   return rows.map(fromVariant);
 }
 
-/** Every row of a scan, for pages that still work on the whole catalog. */
-export async function allRows(scanId: string) {
-  const out: CatalogRow[] = [];
-  let after = 0n;
-  for (;;) {
-    const page = await variantPage(scanId, { after, size: 5000 });
-    if (!page.length) return out;
-    for (const { rowId, ...row } of page) out.push(row);
-    after = page[page.length - 1].rowId;
-  }
-}
-
-/** Catalogs larger than this aren't sent whole to the audit and line sheet pages. */
-export const WHOLE_CATALOG_LIMIT = 10_000;
 
 /**
  * What every page's loader needs: the latest catalog (id, size, date) and the
@@ -483,4 +502,10 @@ export async function catalogForPage(shop: string, admin: AdminApiContext) {
     scannedAt: catalog?.scannedAt ?? null,
     scan,
   };
+}
+
+/** A plan's variant limit for a scan: whether the catalog is over it, and the last row it covers. */
+export async function planCap(scanId: string, count: number, limit: number) {
+  const over = count > limit;
+  return { limit, over, maxId: over ? await rowCap(scanId, limit) : null };
 }

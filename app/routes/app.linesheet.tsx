@@ -1,19 +1,27 @@
 import { useMemo, useState, type ReactNode } from "react";
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import { useLoaderData, useNavigate } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { authenticate } from "../shopify.server";
-import { catalogForPage } from "../lib/catalog.server";
+import { catalogForPage, planCap } from "../lib/catalog.server";
+import {
+  LINE_SHEET_MAX,
+  lineSheetFilters,
+  lineSheetOptions,
+  lineSheetRows,
+} from "../lib/linesheet.server";
 import { getPlan, planSelectionUrl } from "../lib/plans.server";
-import { canUseLineSheets } from "../lib/plans";
+import { PLANS, VARIANT_LIMIT, canUseLineSheets } from "../lib/plans";
 import { UpgradeSection } from "../components/Upgrade";
 import { downloadFile, toCsv, type CatalogRow } from "../lib/catalog";
 import { ScanBanner, ScanProgress, useCatalogScan } from "../components/CatalogScan";
 import {
+  ALL,
   groupProducts,
   lineSheetHtml,
+  type LineSheetFilters,
   type LineSheetSettings,
   type PricingMode,
 } from "../lib/linesheet";
@@ -24,13 +32,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   if (!canUseLineSheets(plan)) {
     return { locked: true as const, upgradeUrl: planSelectionUrl(session.shop) };
   }
-  return { locked: false as const, ...(await catalogForPage(session.shop, admin)) };
+  const catalog = await catalogForPage(session.shop, admin);
+  const filters = lineSheetFilters(request);
+  const base = { locked: false as const, ...catalog, plan, filters, max: LINE_SHEET_MAX };
+  if (!catalog.scanId || catalog.count === null) return { ...base, sheet: null };
+
+  // Only the plan's share of the catalog, and only the variants matching the filters.
+  const cap = await planCap(catalog.scanId, catalog.count, VARIANT_LIMIT[plan]);
+  const [options, matched] = await Promise.all([
+    lineSheetOptions(catalog.scanId, cap.maxId),
+    lineSheetRows(catalog.scanId, filters, cap.maxId),
+  ]);
+  return { ...base, sheet: { ...options, ...matched, cap: { limit: cap.limit, over: cap.over } } };
 };
 
-const ALL = "__all__";
-
-const uniqueSorted = (values: string[]) =>
-  [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+type Loaded = Extract<ReturnType<typeof useLoaderData<typeof loader>>, { locked: false }>;
 
 export default function LineSheetPage() {
   const data = useLoaderData<typeof loader>();
@@ -44,14 +60,10 @@ export default function LineSheetPage() {
   return <LineSheetLoaded {...data} />;
 }
 
-function LineSheetLoaded({
-  rows,
-  scannedAt,
-  scan: initialScan,
-}: Extract<ReturnType<typeof useLoaderData<typeof loader>>, { locked: false }>) {
-  const { scan, running, rescan } = useCatalogScan(initialScan, scannedAt);
+function LineSheetLoaded(data: Loaded) {
+  const { scan, running, rescan } = useCatalogScan(data.scan, data.scannedAt);
 
-  if (!rows) {
+  if (!data.sheet) {
     return (
       <s-page heading="Line sheet">
         <ScanProgress scan={scan} onRetry={rescan} />
@@ -60,8 +72,9 @@ function LineSheetLoaded({
   }
   return (
     <LineSheetBuilder
-      rows={rows}
-      banner={<ScanBanner scan={scan} scannedAt={scannedAt} onRetry={rescan} />}
+      data={data}
+      sheet={data.sheet}
+      banner={<ScanBanner scan={scan} scannedAt={data.scannedAt} onRetry={rescan} />}
       running={running}
       rescan={rescan}
     />
@@ -69,23 +82,37 @@ function LineSheetLoaded({
 }
 
 function LineSheetBuilder({
-  rows,
+  data,
+  sheet,
   banner,
   running,
   rescan,
 }: {
-  rows: CatalogRow[];
+  data: Loaded;
+  sheet: NonNullable<Loaded["sheet"]>;
   banner: ReactNode;
   running: boolean;
   rescan: () => void;
 }) {
   const shopify = useAppBridge();
+  const navigate = useNavigate();
+  const { filters } = data;
+  const { rows: rawRows, vendors, types, tags } = sheet;
+  // Loader data arrives as JSON; the rows are plain catalog rows.
+  const rows = rawRows as CatalogRow[];
 
-  const [vendor, setVendor] = useState(ALL);
-  const [productType, setProductType] = useState(ALL);
-  const [tag, setTag] = useState(ALL);
-  const [includeDrafts, setIncludeDrafts] = useState(false);
-  const [hideOutOfStock, setHideOutOfStock] = useState(false);
+  // Filters live in the address, so the server sends only matching variants.
+  const filter = (change: Partial<LineSheetFilters>) => {
+    const next = { ...filters, ...change };
+    const qs = new URLSearchParams();
+    if (next.vendor !== ALL) qs.set("vendor", next.vendor);
+    if (next.productType !== ALL) qs.set("type", next.productType);
+    if (next.tag !== ALL) qs.set("tag", next.tag);
+    if (next.includeDrafts) qs.set("drafts", "1");
+    if (next.hideOutOfStock) qs.set("instock", "1");
+    navigate(`/app/linesheet${qs.size ? `?${qs}` : ""}`, { preventScrollReset: true });
+  };
+
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [settings, setSettings] = useState<LineSheetSettings>({
     title: "Wholesale line sheet",
@@ -103,30 +130,7 @@ function LineSheetBuilder({
     value: LineSheetSettings[K],
   ) => setSettings((s) => ({ ...s, [key]: value }));
 
-  const vendors = useMemo(() => uniqueSorted(rows.map((r) => r.vendor)), [rows]);
-  const types = useMemo(
-    () => uniqueSorted(rows.map((r) => r.productType)),
-    [rows],
-  );
-  const tags = useMemo(() => uniqueSorted(rows.flatMap((r) => r.tags)), [rows]);
-
-  const filtered = useMemo(
-    () =>
-      rows.filter(
-        (r) =>
-          (r.status === "ACTIVE" || (includeDrafts && r.status === "DRAFT")) &&
-          (vendor === ALL || r.vendor === vendor) &&
-          (productType === ALL || r.productType === productType) &&
-          (tag === ALL || r.tags.includes(tag)) &&
-          (!hideOutOfStock || (r.inventoryQuantity ?? 0) > 0),
-      ),
-    [rows, vendor, productType, tag, includeDrafts, hideOutOfStock],
-  );
-
-  const products = useMemo(
-    () => groupProducts(filtered, settings),
-    [filtered, settings],
-  );
+  const products = useMemo(() => groupProducts(rows, settings), [rows, settings]);
   const selected = products.filter((p) => !excluded.has(p.productId));
   const missingCost =
     settings.pricingMode === "cost_markup"
@@ -199,14 +203,27 @@ function LineSheetBuilder({
       </s-button>
 
       {banner}
+      {sheet.cap.over && (
+        <s-banner tone="info" heading={`Using your first ${sheet.cap.limit.toLocaleString()} variants`}>
+          The {PLANS[data.plan].name} plan covers up to {sheet.cap.limit.toLocaleString()} active
+          and draft variants; your catalog has {(data.count ?? 0).toLocaleString()}. The Warehouse
+          plan covers up to {VARIANT_LIMIT.warehouse.toLocaleString()}.
+        </s-banner>
+      )}
+      {sheet.more && (
+        <s-banner tone="warning" heading={`Showing the first ${data.max.toLocaleString()} matching variants`}>
+          One line sheet holds up to {data.max.toLocaleString()} variants. Narrow it with the
+          vendor, product type or tag filters.
+        </s-banner>
+      )}
 
       <s-section heading="Choose products">
         <s-stack direction="block" gap="base">
           <s-grid gridTemplateColumns="1fr 1fr 1fr" gap="base">
             <s-select
               label="Vendor"
-              value={vendor}
-              onChange={(e) => setVendor(e.currentTarget.value)}
+              value={filters.vendor}
+              onChange={(e) => filter({ vendor: e.currentTarget.value })}
             >
               <s-option value={ALL}>All vendors</s-option>
               {vendors.map((v) => (
@@ -217,8 +234,8 @@ function LineSheetBuilder({
             </s-select>
             <s-select
               label="Product type"
-              value={productType}
-              onChange={(e) => setProductType(e.currentTarget.value)}
+              value={filters.productType}
+              onChange={(e) => filter({ productType: e.currentTarget.value })}
             >
               <s-option value={ALL}>All types</s-option>
               {types.map((t) => (
@@ -229,8 +246,8 @@ function LineSheetBuilder({
             </s-select>
             <s-select
               label="Tag"
-              value={tag}
-              onChange={(e) => setTag(e.currentTarget.value)}
+              value={filters.tag}
+              onChange={(e) => filter({ tag: e.currentTarget.value })}
             >
               <s-option value={ALL}>All tags</s-option>
               {tags.map((t) => (
@@ -243,13 +260,13 @@ function LineSheetBuilder({
           <s-stack direction="inline" gap="base">
             <s-checkbox
               label="Include drafts"
-              checked={includeDrafts}
-              onChange={(e) => setIncludeDrafts(e.currentTarget.checked)}
+              checked={filters.includeDrafts}
+              onChange={(e) => filter({ includeDrafts: e.currentTarget.checked })}
             />
             <s-checkbox
               label="Hide out-of-stock variants"
-              checked={hideOutOfStock}
-              onChange={(e) => setHideOutOfStock(e.currentTarget.checked)}
+              checked={filters.hideOutOfStock}
+              onChange={(e) => filter({ hideOutOfStock: e.currentTarget.checked })}
             />
           </s-stack>
 

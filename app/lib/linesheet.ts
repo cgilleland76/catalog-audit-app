@@ -1,5 +1,16 @@
 import type { CatalogRow } from "./catalog";
 
+/** Filter value meaning "any". */
+export const ALL = "__all__";
+
+export type LineSheetFilters = {
+  vendor: string;
+  productType: string;
+  tag: string;
+  includeDrafts: boolean;
+  hideOutOfStock: boolean;
+};
+
 export type PricingMode = "percent_of_retail" | "cost_markup";
 
 export type LineSheetSettings = {

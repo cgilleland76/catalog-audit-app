@@ -30,7 +30,6 @@ import {
   startUndo,
 } from "../lib/fixes.server";
 import { PROVIDERS } from "../lib/wms/index.server";
-import type { Mismatch } from "../lib/wms/types";
 
 // Every comparison and fix (manual or scheduled) across warehouse systems, and
 // every value SKU Doctor changed, with undo for whole runs or single changes.
@@ -176,7 +175,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       status: c.status,
       checked: c.checked,
       total: c.total,
-      differences: c.results ? (JSON.parse(c.results) as Mismatch[]).length : null,
+      differences: c.status === "done" ? c.mismatchCount : null,
       message: c.error ?? scheduled.get(c.id)?.message ?? null,
       fixes: batches.filter((b) => b.comparisonId === c.id),
     })),

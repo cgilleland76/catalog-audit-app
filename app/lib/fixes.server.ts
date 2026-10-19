@@ -1,7 +1,7 @@
 import type { AdminApiContext } from "@shopify/shopify-app-react-router/server";
 
 import prisma from "../db.server";
-import { FIELD_OF, fixableField, type FixField, UNDO_DAYS } from "./fixes";
+import { FIELD_OF, type FixField, UNDO_DAYS } from "./fixes";
 import { TO_LB } from "./wms/index.server";
 
 // "Fix in Shopify": copies warehouse values into Shopify, saving each old value

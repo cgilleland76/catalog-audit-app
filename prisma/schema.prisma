@@ -68,6 +68,7 @@ model WmsComparison {
   skuCursor     String? // last SKU key looked up (per-SKU systems)
   cursor        String? // where a catalog-paging lookup resumes
   rowCursor     BigInt    @default(0) // last CatalogVariant id compared
+  maxRowId      BigInt? // plan limit: variants after this id are left out
   mismatchCount Int       @default(0)
   error         String?
   lockedUntil   DateTime? // a step is running until this time
@@ -223,6 +224,7 @@ model SyncSetting {
   lastStatus   String? // done | failed | skipped
   lastMessage  String?
   runId        String? // the SyncRun in progress
+  leaseUntil   DateTime? // a background worker owns this sync until then
   updatedAt    DateTime  @updatedAt
 
   @@unique([shop, provider])

@@ -1,6 +1,7 @@
 /* eslint-env node */
-// Netlify scheduled function: every hour, asks the app to advance due
-// scheduled syncs (app/routes/internal.sync.tsx). Scheduled functions run only
+// Netlify scheduled function: every hour, asks the app to hand each due
+// scheduled sync to a background worker (app/routes/internal.sync.tsx).
+// Hourly keeps the database idle (and cheap) between runs. Scheduled functions run only
 // on each site's published production deploy, and for at most 30 seconds.
 import { createHmac } from "node:crypto";
 

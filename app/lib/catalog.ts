@@ -87,17 +87,71 @@ export const marginPercent = (price: number, cost: number | null) =>
 
 const money = (n: number) => `$${n.toFixed(2)}`;
 
-export function auditCatalog(
-  allRows: CatalogRow[],
-  options: AuditOptions,
-): AuditedRow[] {
+/** What auditing one row needs to know about the rest of the catalog. */
+export type AuditContext = {
+  minMarginPercent: number;
+  /** How many audited variants share this lower-cased SKU / barcode. */
+  skuCount: (key: string) => number;
+  barcodeCount: (key: string) => number;
+};
+
+export function auditRow(r: CatalogRow, ctx: AuditContext): AuditedRow {
+  const issues: Issue[] = [];
+  const margin = marginPercent(r.price, r.cost);
+
+  if (!r.sku) issues.push({ code: "missing_sku", detail: "No SKU" });
+  else if (ctx.skuCount(r.sku.toLowerCase()) > 1)
+    issues.push({
+      code: "duplicate_sku",
+      detail: `${r.sku} used on ${ctx.skuCount(r.sku.toLowerCase())} variants`,
+    });
+
+  if (!r.barcode) issues.push({ code: "missing_barcode", detail: "No barcode / UPC" });
+  else if (ctx.barcodeCount(r.barcode.toLowerCase()) > 1)
+    issues.push({
+      code: "duplicate_barcode",
+      detail: `${r.barcode} used on ${ctx.barcodeCount(r.barcode.toLowerCase())} variants`,
+    });
+
+  if (r.requiresShipping && (r.weight === null || r.weight <= 0))
+    issues.push({
+      code: "missing_weight",
+      detail: "Ships, but weight is 0 — shipping rates will be wrong",
+    });
+
+  if (r.price <= 0) issues.push({ code: "zero_price", detail: "Selling price is $0" });
+
+  if (r.cost === null) issues.push({ code: "missing_cost", detail: "No cost per item" });
+  else if (r.price > 0 && r.price < r.cost)
+    issues.push({
+      code: "price_below_cost",
+      detail: `Price ${money(r.price)} < cost ${money(r.cost)}`,
+    });
+  else if (margin !== null && margin < ctx.minMarginPercent)
+    issues.push({
+      code: "low_margin",
+      detail: `${margin.toFixed(1)}% margin (target ${ctx.minMarginPercent}%)`,
+    });
+
+  if (r.compareAtPrice !== null && r.compareAtPrice > 0 && r.compareAtPrice <= r.price)
+    issues.push({
+      code: "compare_at_not_higher",
+      detail: `Compare-at ${money(r.compareAtPrice)} ≤ price ${money(r.price)}`,
+    });
+
+  if (!r.imageUrl) issues.push({ code: "missing_image", detail: "Product has no image" });
+
+  return { ...r, issues, margin };
+}
+
+/** Audits a whole list of rows in memory (small catalogs and tests). */
+export function auditCatalog(allRows: CatalogRow[], options: AuditOptions): AuditedRow[] {
   const rows = allRows.filter(
     (r) =>
       r.status === "ACTIVE" ||
       (options.includeDrafts && r.status === "DRAFT") ||
       (options.includeArchived && r.status === "ARCHIVED"),
   );
-
   const countBy = (key: (r: CatalogRow) => string | null) => {
     const counts = new Map<string, number>();
     for (const r of rows) {
@@ -106,61 +160,15 @@ export function auditCatalog(
     }
     return counts;
   };
-  const skuCounts = countBy((r) => r.sku);
-  const barcodeCounts = countBy((r) => r.barcode);
-
-  return rows.map((r) => {
-    const issues: Issue[] = [];
-    const margin = marginPercent(r.price, r.cost);
-
-    if (!r.sku) issues.push({ code: "missing_sku", detail: "No SKU" });
-    else if ((skuCounts.get(r.sku.toLowerCase()) ?? 0) > 1)
-      issues.push({
-        code: "duplicate_sku",
-        detail: `${r.sku} used on ${skuCounts.get(r.sku.toLowerCase())} variants`,
-      });
-
-    if (!r.barcode)
-      issues.push({ code: "missing_barcode", detail: "No barcode / UPC" });
-    else if ((barcodeCounts.get(r.barcode.toLowerCase()) ?? 0) > 1)
-      issues.push({
-        code: "duplicate_barcode",
-        detail: `${r.barcode} used on ${barcodeCounts.get(r.barcode.toLowerCase())} variants`,
-      });
-
-    if (r.requiresShipping && (r.weight === null || r.weight <= 0))
-      issues.push({
-        code: "missing_weight",
-        detail: "Ships, but weight is 0 — shipping rates will be wrong",
-      });
-
-    if (r.price <= 0)
-      issues.push({ code: "zero_price", detail: "Selling price is $0" });
-
-    if (r.cost === null)
-      issues.push({ code: "missing_cost", detail: "No cost per item" });
-    else if (r.price > 0 && r.price < r.cost)
-      issues.push({
-        code: "price_below_cost",
-        detail: `Price ${money(r.price)} < cost ${money(r.cost)}`,
-      });
-    else if (margin !== null && margin < options.minMarginPercent)
-      issues.push({
-        code: "low_margin",
-        detail: `${margin.toFixed(1)}% margin (target ${options.minMarginPercent}%)`,
-      });
-
-    if (r.compareAtPrice !== null && r.compareAtPrice > 0 && r.compareAtPrice <= r.price)
-      issues.push({
-        code: "compare_at_not_higher",
-        detail: `Compare-at ${money(r.compareAtPrice)} ≤ price ${money(r.price)}`,
-      });
-
-    if (!r.imageUrl)
-      issues.push({ code: "missing_image", detail: "Product has no image" });
-
-    return { ...r, issues, margin };
-  });
+  const skus = countBy((r) => r.sku);
+  const barcodes = countBy((r) => r.barcode);
+  return rows.map((r) =>
+    auditRow(r, {
+      minMarginPercent: options.minMarginPercent,
+      skuCount: (k) => skus.get(k) ?? 0,
+      barcodeCount: (k) => barcodes.get(k) ?? 0,
+    }),
+  );
 }
 
 export function toCsv(header: string[], rows: (string | number | null)[][]) {

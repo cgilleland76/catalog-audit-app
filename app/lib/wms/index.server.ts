@@ -3,6 +3,7 @@ import { decryptJson, encryptJson } from "../crypto.server";
 import type { CatalogRow } from "../catalog";
 import {
   latestCatalog,
+  rowCap,
   scopeStatuses,
   skuKey,
   variantPage,
@@ -139,13 +140,16 @@ export async function createComparison(
   shop: string,
   provider: WmsProvider,
   scope: Scope,
+  variantLimit: number,
 ) {
   const catalog = await latestCatalog(shop);
   if (!catalog) return null;
+  const maxRowId = await rowCap(catalog.scanId, variantLimit);
   const [{ count }] = await prisma.$queryRaw<{ count: bigint }[]>`
     SELECT COUNT(DISTINCT "skuKey") AS count FROM "CatalogVariant"
     WHERE "scanId" = ${catalog.scanId} AND "skuKey" IS NOT NULL
-      AND "status" = ANY(${scopeStatuses(scope)})`;
+      AND "status" = ANY(${scopeStatuses(scope)})
+      AND "id" <= ${maxRowId ?? 9223372036854775807n}`;
   return prisma.wmsComparison.create({
     data: {
       shop,
@@ -155,16 +159,24 @@ export async function createComparison(
       status: "running",
       stage: "lookup",
       total: Number(count),
+      maxRowId,
     },
   });
 }
 
 /** Distinct SKUs (original spelling) after `afterKey`, in key order. */
-async function nextSkus(scanId: string, statuses: string[], afterKey: string | null, limit: number) {
+async function nextSkus(
+  scanId: string,
+  statuses: string[],
+  afterKey: string | null,
+  limit: number,
+  maxId: bigint | null,
+) {
   return prisma.$queryRaw<{ skuKey: string; sku: string }[]>`
     SELECT "skuKey", MIN("sku") AS sku FROM "CatalogVariant"
     WHERE "scanId" = ${scanId} AND "skuKey" IS NOT NULL
       AND "status" = ANY(${statuses}) AND "skuKey" > ${afterKey ?? ""}
+      AND "id" <= ${maxId ?? 9223372036854775807n}
     GROUP BY "skuKey" ORDER BY "skuKey" LIMIT ${limit}`;
 }
 
@@ -219,7 +231,7 @@ export async function advanceComparison(comparisonId: string) {
       }
       if (provider.pagesCatalog) {
         // The provider pages its own catalog and needs every SKU to match against.
-        const all = await nextSkus(c.scanId, statuses, null, 10_000_000);
+        const all = await nextSkus(c.scanId, statuses, null, 10_000_000, c.maxRowId);
         const result = await provider.lookup(credentials, all.map((r) => r.sku), deadline, c.cursor);
         await saveFound(c.id, result.found);
         const done = !result.cursor;
@@ -230,7 +242,7 @@ export async function advanceComparison(comparisonId: string) {
         });
       } else {
         while (c.checked < c.total && Date.now() + 1500 < deadline) {
-          const batch = await nextSkus(c.scanId, statuses, c.skuCursor, LOOKUP_BATCH);
+          const batch = await nextSkus(c.scanId, statuses, c.skuCursor, LOOKUP_BATCH, c.maxRowId);
           if (!batch.length) break;
           const result = await provider.lookup(credentials, batch.map((r) => r.sku), deadline, null);
           await saveFound(c.id, result.found);
@@ -241,7 +253,7 @@ export async function advanceComparison(comparisonId: string) {
           });
           if (result.processed < batch.length) break; // out of time inside lookup
         }
-        const remaining = await nextSkus(c.scanId, statuses, c.skuCursor, 1);
+        const remaining = await nextSkus(c.scanId, statuses, c.skuCursor, 1, c.maxRowId);
         if (!remaining.length) {
           c = await save({ checked: c.total, stage: "compare", rowCursor: 0n });
         }
@@ -249,7 +261,12 @@ export async function advanceComparison(comparisonId: string) {
     }
 
     while (c.stage === "compare" && Date.now() + 1500 < deadline) {
-      const rows = await variantPage(c.scanId, { after: c.rowCursor, size: COMPARE_BATCH, statuses });
+      const rows = await variantPage(c.scanId, {
+        after: c.rowCursor,
+        size: COMPARE_BATCH,
+        statuses,
+        maxId: c.maxRowId,
+      });
       if (!rows.length) {
         await save({ status: "done", finishedAt: new Date(), lockedUntil: null });
         return;

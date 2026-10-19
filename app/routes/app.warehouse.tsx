@@ -10,9 +10,9 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
-import { catalogForPage, loadCatalog } from "../lib/catalog.server";
+import { catalogForPage, type Scope } from "../lib/catalog.server";
 import { getPlan, planSelectionUrl } from "../lib/plans.server";
-import { canUseWarehouse } from "../lib/plans";
+import { canUseWarehouse, VARIANT_LIMIT } from "../lib/plans";
 import {
   activeFix,
   advanceFix,
@@ -27,7 +27,6 @@ import {
   FIELD_LABEL,
   FIX_FIELDS,
   fixableField,
-  fixCounts,
   FREQUENCIES,
   UNDO_DAYS,
   type FixField,
@@ -47,6 +46,8 @@ import {
   saveCredentials,
   advanceComparison,
   createComparison,
+  mismatchCounts,
+  mismatchPage,
 } from "../lib/wms/index.server";
 import {
   MISMATCH_INFO,
@@ -62,21 +63,41 @@ const providerParam = (request: Request) =>
 
 const summarize = (c: {
   status: string;
+  stage: string;
+  scope: string;
   checked: number;
   total: number;
+  mismatchCount: number;
   error: string | null;
   startedAt: Date;
   finishedAt: Date | null;
-  results: string | null;
 }) => ({
   status: c.status,
+  stage: c.stage,
+  scope: c.scope as Scope,
   checked: c.checked,
   total: c.total,
   error: c.error,
   startedAt: c.startedAt.toISOString(),
   finishedAt: c.finishedAt?.toISOString() ?? null,
-  differences: c.results ? (JSON.parse(c.results) as Mismatch[]).length : 0,
+  differences: c.mismatchCount,
 });
+
+const PAGE_SIZE = 100;
+const FIX_PREVIEW_ROWS = 25;
+const EXPORT_LIMIT = 25_000;
+
+/** The issue filter and how many rows to show, from the address. */
+function resultParams(request: Request) {
+  const url = new URL(request.url);
+  const issue = url.searchParams.get("issue");
+  return {
+    issue: (issue && issue in MISMATCH_INFO ? issue : issue === "all" ? "all" : "weight_mismatch") as
+      | MismatchCode
+      | "all",
+    limit: Math.min(Math.max(Number(url.searchParams.get("limit")) || PAGE_SIZE, PAGE_SIZE), 5000),
+  };
+}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
@@ -116,6 +137,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const provider = getProvider(param);
   const catalog = await catalogForPage(session.shop, admin);
+  const filters = resultParams(request);
   const [latest, fixes, active, sync] = await Promise.all([
     prisma.wmsComparison.findFirst({
       where: { shop: session.shop, provider: provider.id },
@@ -134,7 +156,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     locked: false as const,
     view: "compare" as const,
     provider: providerInfo(provider),
-    catalogCount: catalog.rows?.length ?? null,
+    catalogCount: catalog.count,
     scannedAt: catalog.scannedAt,
     scan: catalog.scan,
     canWrite: await canWriteProducts(admin),
@@ -152,17 +174,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       enabled: sync?.enabled ?? false,
       frequency: sync?.frequency ?? "daily",
       fixFields: parseFields(sync?.fixFields),
+      scope: (sync?.scope ?? "active") as Scope,
       stage: sync?.stage ?? "idle",
       lastRunAt: sync?.lastRunAt?.toISOString() ?? null,
       lastStatus: sync?.lastStatus ?? null,
       lastMessage: sync?.lastMessage ?? null,
       nextRunAt: sync?.nextRunAt?.toISOString() ?? null,
     },
-    comparison: latest && {
-      id: latest.id,
-      ...summarize(latest),
-      results: latest.results ? (JSON.parse(latest.results) as Mismatch[]) : [],
-    },
+    filters,
+    counts: latest?.status === "done" ? await mismatchCounts(latest.id) : null,
+    results:
+      latest?.status === "done"
+        ? await mismatchPage(latest.id, {
+            code: filters.issue === "all" ? null : filters.issue,
+            take: filters.limit,
+          })
+        : [],
+    fixPreview:
+      latest?.status === "done"
+        ? await mismatchPage(latest.id, { fixableOnly: true, take: FIX_PREVIEW_ROWS * 3 })
+        : [],
+    comparison: latest && { id: latest.id, ...summarize(latest) },
   };
 };
 
@@ -209,15 +241,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
     if (running) return { ok: false, message: "A comparison is already running" };
 
-    const catalog = await loadCatalog(session.shop);
-    if (!catalog) {
+    const scope: Scope = form.get("scope") === "active_draft" ? "active_draft" : "active";
+    const plan = await getPlan(session.shop, admin);
+    const comparison = await createComparison(session.shop, provider, scope, VARIANT_LIMIT[plan]);
+    if (!comparison) {
       return { ok: false, message: "Your catalog is still being read; try again in a minute" };
     }
-    const live = catalog.rows.filter((r) => r.status !== "ARCHIVED");
-    const comparison = await createComparison(session.shop, provider, live);
     return {
       ok: true,
-      message: `Checking ${comparison.total} SKUs in ${provider.name}`,
+      message: `Checking ${comparison.total.toLocaleString()} SKUs in ${provider.name}`,
     };
   }
 
@@ -229,12 +261,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       where: { shop: session.shop, provider: provider.id, status: "done" },
       orderBy: { startedAt: "desc" },
     });
-    if (!comparison?.results) return { ok: false, message: "Run a comparison first" };
+    if (!comparison) return { ok: false, message: "Run a comparison first" };
     const created = await createFixBatch({
       shop: session.shop,
       provider: provider.id,
       comparisonId: comparison.id,
-      results: JSON.parse(comparison.results) as Mismatch[],
       fields,
       source: "manual",
     });
@@ -255,6 +286,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       fixFields: FIX_FIELDS.filter((f) =>
         String(form.get("fixFields") ?? "").split(",").includes(f),
       ),
+      scope: String(form.get("scope") ?? "active"),
     });
     return {
       ok: true,
@@ -264,14 +296,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   // Runs the next few seconds of a comparison or fix; the page calls this
   // while it polls. (Scheduled syncs advance on their own.)
+  // Every difference of the current filter, for the CSV download.
+  if (intent === "export") {
+    const latest = await prisma.wmsComparison.findFirst({
+      where: { shop: session.shop, provider: provider.id, status: "done" },
+      orderBy: { startedAt: "desc" },
+    });
+    if (!latest) return { ok: false, message: "Run a comparison first" };
+    const { issue } = resultParams(request);
+    const rows = await mismatchPage(latest.id, {
+      code: issue === "all" ? null : issue,
+      take: EXPORT_LIMIT,
+    });
+    return { ok: true, message: "", rows };
+  }
+
   if (intent === "step") {
     const running = await prisma.wmsComparison.findFirst({
       where: { shop: session.shop, provider: provider.id, status: "running" },
     });
     if (running) {
-      await advanceComparison(running.id, async () =>
-        (await loadCatalog(session.shop))?.rows ?? null,
-      );
+      await advanceComparison(running.id);
     }
     const fix = await activeFix(session.shop);
     if (fix) await advanceFix(fix.id, admin);
@@ -281,7 +326,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return { ok: false, message: "Unknown action" };
 };
 
-const PAGE_SIZE = 100;
 const CODES = Object.keys(MISMATCH_INFO) as MismatchCode[];
 
 type Loaded = Extract<
@@ -534,6 +578,10 @@ function WarehouseComparison({
   fixes,
   problems,
   sync,
+  filters,
+  counts,
+  results,
+  fixPreview,
 }: Extract<Loaded, { view: "compare" }>) {
   const catalogScan = useCatalogScan(initialScan, scannedAt);
   const catalogReady = catalogCount !== null;
@@ -542,8 +590,14 @@ function WarehouseComparison({
   const shopify = useAppBridge();
   const navigate = useNavigate();
 
-  const [filter, setFilter] = useState<MismatchCode | "all">("weight_mismatch");
-  const [limit, setLimit] = useState(PAGE_SIZE);
+  const exporter = useFetcher<typeof action>();
+  const [scope, setScope] = useState<Scope>(comparison?.scope ?? "active");
+  const filter = filters.issue;
+  // Filters live in the address, so the server sends only the rows shown.
+  const show = (issue: MismatchCode | "all", limit = PAGE_SIZE) =>
+    navigate(`/app/warehouse?provider=${provider.id}&issue=${issue}&limit=${limit}`, {
+      preventScrollReset: true,
+    });
 
   const busy = fetcher.state !== "idle";
   const running = comparison?.status === "running";
@@ -572,33 +626,29 @@ function WarehouseComparison({
     return () => clearInterval(timer);
   }, [stepping, stepper, provider.id]);
 
-  const results = useMemo(() => comparison?.results ?? [], [comparison]);
-  const counts = useMemo(() => {
-    const c = Object.fromEntries(CODES.map((k) => [k, 0])) as Record<
-      MismatchCode,
-      number
-    >;
-    for (const m of results) c[m.code]++;
-    return c;
-  }, [results]);
-  const fixable = useMemo(
-    () => results.filter((m) => fixableField(m) !== null).length,
-    [results],
-  );
-  const visible = useMemo(
-    () => results.filter((m) => filter === "all" || m.code === filter),
-    [results, filter],
-  );
+  const total = (k: MismatchCode) => counts?.[k].total ?? 0;
+  const differences = comparison?.differences ?? 0;
+  const shown = filter === "all" ? differences : total(filter);
+  const fixable = counts
+    ? FIX_FIELDS.reduce((n, f) => n + counts[`${f}_mismatch` as MismatchCode].fixable, 0)
+    : 0;
 
   const submit = (data: Record<string, string>) =>
     fetcher.submit({ ...data, provider: provider.id }, { method: "POST" });
 
-  const exportCsv = () => {
+  const exportCsv = () =>
+    exporter.submit(
+      { intent: "export", provider: provider.id },
+      { method: "POST", action: `/app/warehouse?provider=${provider.id}&issue=${filter}` },
+    );
+  useEffect(() => {
+    const rows = exporter.data && "rows" in exporter.data ? exporter.data.rows : null;
+    if (!rows) return;
     downloadFile(
       `${provider.id}-comparison-${(comparison?.startedAt ?? "").slice(0, 10)}.csv`,
       toCsv(
         ["Issue", "SKU", "Product", "Shopify", provider.name, "Product ID", "Variant ID"],
-        visible.map((m) => [
+        rows.map((m) => [
           MISMATCH_INFO[m.code].label,
           m.sku,
           m.label,
@@ -610,7 +660,9 @@ function WarehouseComparison({
       ),
       "text/csv;charset=utf-8",
     );
-  };
+    // Only a new export should download.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exporter.data]);
 
   return (
     <s-page heading={`${provider.name} comparison`}>
@@ -621,7 +673,7 @@ function WarehouseComparison({
         slot="primary-action"
         variant="primary"
         disabled={running || busy || !catalogReady}
-        onClick={() => submit({ intent: "compare" })}
+        onClick={() => submit({ intent: "compare", scope })}
         {...(busy && fetcher.formData?.get("intent") === "compare"
           ? { loading: true }
           : {})}
@@ -631,8 +683,12 @@ function WarehouseComparison({
       <s-button slot="secondary-actions" onClick={() => navigate("/app/warehouse")}>
         All warehouse systems
       </s-button>
-      {comparison?.status === "done" && results.length > 0 && (
-        <s-button slot="secondary-actions" onClick={exportCsv}>
+      {comparison?.status === "done" && shown > 0 && (
+        <s-button
+          slot="secondary-actions"
+          onClick={exportCsv}
+          {...(exporter.state !== "idle" ? { loading: true } : {})}
+        >
           Export (CSV)
         </s-button>
       )}
@@ -660,23 +716,36 @@ function WarehouseComparison({
         </s-banner>
       )}
 
-      {!comparison && (
-        <s-section>
-          <s-paragraph>
-            Connected. Run a comparison to check every Shopify SKU against{" "}
-            {provider.name}.
-          </s-paragraph>
-        </s-section>
-      )}
+      <s-section>
+        <s-stack direction="inline" gap="base" alignItems="end">
+          <s-select
+            label="Products to compare"
+            value={scope}
+            disabled={running}
+            onChange={(e) => setScope(e.currentTarget.value as Scope)}
+          >
+            <s-option value="active">Active products</s-option>
+            <s-option value="active_draft">Active and draft products</s-option>
+          </s-select>
+          <s-text color="subdued">
+            {comparison
+              ? `Last run: ${comparison.scope === "active_draft" ? "active and draft" : "active"} products. `
+              : `Connected. Run a comparison to check your Shopify SKUs against ${provider.name}. `}
+            Archived products are never compared.
+          </s-text>
+        </s-stack>
+      </s-section>
 
       {running && comparison && (
         <s-section heading="Comparing…">
           <s-stack direction="inline" gap="base" alignItems="center">
             <s-spinner accessibilityLabel="Comparing" />
             <s-text>
-              {comparison.checked === 0 && comparison.total > 0
-                ? `Reading products from ${provider.name} to check ${comparison.total.toLocaleString()} SKUs.`
-                : `Checked ${comparison.checked.toLocaleString()} of ${comparison.total.toLocaleString()} SKUs in ${provider.name}.`}{" "}
+              {comparison.stage === "compare"
+                ? `Comparing with what ${provider.name} returned; ${comparison.differences.toLocaleString()} differences so far.`
+                : comparison.checked === 0 && comparison.total > 0
+                  ? `Reading products from ${provider.name} to check ${comparison.total.toLocaleString()} SKUs.`
+                  : `Checked ${comparison.checked.toLocaleString()} of ${comparison.total.toLocaleString()} SKUs in ${provider.name}.`}{" "}
               Keep this page open; the comparison pauses while it&apos;s
               closed and picks up where it left off when you return.
             </s-text>
@@ -696,7 +765,7 @@ function WarehouseComparison({
             <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
               <s-text color="subdued">
                 {comparison.total.toLocaleString()} SKUs checked ·{" "}
-                {results.length.toLocaleString()} differences · finished{" "}
+                {differences.toLocaleString()} differences · finished{" "}
                 {new Date(comparison.finishedAt ?? comparison.startedAt).toLocaleString()}
               </s-text>
               {fixable > 0 && (
@@ -714,26 +783,20 @@ function WarehouseComparison({
                 <s-clickable-chip
                   key={k}
                   color={filter === k ? "strong" : "base"}
-                  onClick={() => {
-                    setFilter(k);
-                    setLimit(PAGE_SIZE);
-                  }}
+                  onClick={() => show(k)}
                 >
-                  {MISMATCH_INFO[k].label} ({counts[k]})
+                  {MISMATCH_INFO[k].label} ({total(k).toLocaleString()})
                 </s-clickable-chip>
               ))}
               <s-clickable-chip
                 color={filter === "all" ? "strong" : "base"}
-                onClick={() => {
-                  setFilter("all");
-                  setLimit(PAGE_SIZE);
-                }}
+                onClick={() => show("all")}
               >
-                All ({results.length})
+                All ({differences.toLocaleString()})
               </s-clickable-chip>
             </s-stack>
 
-            {visible.length === 0 ? (
+            {results.length === 0 ? (
               <s-paragraph>Nothing here — Shopify and {provider.name} agree.</s-paragraph>
             ) : (
               <s-table>
@@ -745,7 +808,7 @@ function WarehouseComparison({
                   <s-table-header>{provider.name}</s-table-header>
                 </s-table-header-row>
                 <s-table-body>
-                  {visible.slice(0, limit).map((m) => (
+                  {results.map((m) => (
                     <s-table-row key={`${m.variantId}-${m.code}`}>
                       <s-table-cell>
                         <s-link
@@ -768,9 +831,9 @@ function WarehouseComparison({
                 </s-table-body>
               </s-table>
             )}
-            {visible.length > limit && (
-              <s-button onClick={() => setLimit(limit + PAGE_SIZE)}>
-                Show more ({(visible.length - limit).toLocaleString()} left)
+            {shown > results.length && (
+              <s-button onClick={() => show(filter, filters.limit + PAGE_SIZE)}>
+                Show more ({(shown - results.length).toLocaleString()} left)
               </s-button>
             )}
           </s-stack>
@@ -845,7 +908,8 @@ function WarehouseComparison({
 
       {comparison?.status === "done" && (
         <FixModal
-          results={results}
+          preview={fixPreview}
+          counts={counts}
           providerId={provider.id}
           providerName={provider.name}
           canWrite={canWrite}
@@ -924,27 +988,32 @@ const PREVIEW_ROWS = 25;
 
 /** Popout: choose which fields to copy from the warehouse, preview, apply. */
 function FixModal({
-  results,
+  preview,
+  counts: allCounts,
   providerId,
   providerName,
   canWrite,
 }: {
-  results: Mismatch[];
+  preview: Mismatch[];
+  counts: Record<MismatchCode, { total: number; fixable: number }> | null;
   providerId: string;
   providerName: string;
   canWrite: boolean;
 }) {
   const fetcher = useFetcher<typeof action>();
   const shopify = useAppBridge();
-  const counts = useMemo(() => fixCounts(results), [results]);
+  const counts = Object.fromEntries(
+    FIX_FIELDS.map((f) => [f, allCounts?.[`${f}_mismatch` as MismatchCode].fixable ?? 0]),
+  ) as Record<FixField, number>;
   const [fields, setFields] = useState<FixField[]>(() => FIX_FIELDS.filter((f) => counts[f] > 0));
   const chosen = useMemo(
-    () => results.filter((m) => {
+    () => preview.filter((m) => {
       const field = fixableField(m);
       return field !== null && fields.includes(field);
     }),
-    [results, fields],
+    [preview, fields],
   );
+  const chosenTotal = fields.reduce((n, f) => n + counts[f], 0);
   const busy = fetcher.state !== "idle";
 
   useEffect(() => {
@@ -980,7 +1049,7 @@ function FixModal({
             />
           ))}
         </s-stack>
-        {chosen.length > 0 ? (
+        {chosenTotal > 0 ? (
           <s-table>
             <s-table-header-row>
               <s-table-header listSlot="primary">Product</s-table-header>
@@ -1004,9 +1073,9 @@ function FixModal({
         ) : (
           <s-paragraph>Choose at least one field.</s-paragraph>
         )}
-        {chosen.length > PREVIEW_ROWS && (
+        {chosenTotal > Math.min(chosen.length, PREVIEW_ROWS) && (
           <s-text color="subdued">
-            …and {(chosen.length - PREVIEW_ROWS).toLocaleString()} more. Export the
+            …and {(chosenTotal - Math.min(chosen.length, PREVIEW_ROWS)).toLocaleString()} more. Export the
             results (CSV) to see every change.
           </s-text>
         )}
@@ -1014,7 +1083,7 @@ function FixModal({
       <s-button
         slot="primary-action"
         variant="primary"
-        disabled={!canWrite || chosen.length === 0}
+        disabled={!canWrite || chosenTotal === 0}
         onClick={() =>
           fetcher.submit(
             { intent: "fix", provider: providerId, fields: fields.join(",") },
@@ -1023,7 +1092,7 @@ function FixModal({
         }
         {...(busy ? { loading: true } : {})}
       >
-        Fix {chosen.length.toLocaleString()} values
+        Fix {chosenTotal.toLocaleString()} values
       </s-button>
       <s-button slot="secondary-actions" commandFor="fix-modal" command="--hide">
         Cancel
@@ -1090,6 +1159,7 @@ function SyncSettings({
   const [enabled, setEnabled] = useState(sync.enabled);
   const [frequency, setFrequency] = useState(sync.frequency);
   const [fields, setFields] = useState<FixField[]>(sync.fixFields);
+  const [syncScope, setSyncScope] = useState<Scope>(sync.scope);
   const busy = fetcher.state !== "idle";
 
   useEffect(() => {
@@ -1127,6 +1197,15 @@ function SyncSettings({
             </s-option>
           ))}
         </s-select>
+        <s-select
+          label="Products to compare"
+          value={syncScope}
+          disabled={!enabled}
+          onChange={(e) => setSyncScope(e.currentTarget.value as Scope)}
+        >
+          <s-option value="active">Active products</s-option>
+          <s-option value="active_draft">Active and draft products</s-option>
+        </s-select>
         <s-stack direction="block" gap="small-200">
           <s-text>Also fix in Shopify automatically:</s-text>
           {FIX_FIELDS.map((f) => (
@@ -1154,6 +1233,7 @@ function SyncSettings({
                 enabled: String(enabled),
                 frequency,
                 fixFields: fields.join(","),
+                scope: syncScope,
               },
               { method: "POST" },
             )

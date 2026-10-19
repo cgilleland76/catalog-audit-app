@@ -1,23 +1,44 @@
-import { useMemo, useState, type ReactNode } from "react";
-import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import { useEffect, useState } from "react";
+import type {
+  ActionFunctionArgs,
+  HeadersFunction,
+  LoaderFunctionArgs,
+} from "react-router";
+import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { authenticate } from "../shopify.server";
-import { catalogForPage } from "../lib/catalog.server";
+import { catalogForPage, latestCatalog, planCap } from "../lib/catalog.server";
+import { auditScan, type AuditFilters } from "../lib/audit.server";
 import { getPlan, planSelectionUrl } from "../lib/plans.server";
-import { FREE_VARIANT_LIMIT } from "../lib/plans";
+import { PLANS, VARIANT_LIMIT } from "../lib/plans";
 import { ScanBanner, ScanProgress, useCatalogScan } from "../components/CatalogScan";
 import {
   ISSUE_INFO,
-  auditCatalog,
   downloadFile,
   numericId,
   toCsv,
   variantLabel,
-  type CatalogRow,
   type IssueCode,
 } from "../lib/catalog";
+
+const PAGE_SIZE = 100;
+const EXPORT_LIMIT = 25_000;
+const ISSUE_CODES = Object.keys(ISSUE_INFO) as IssueCode[];
+
+/** The audit's settings and filters live in the address. */
+function filtersFrom(request: Request): AuditFilters {
+  const url = new URL(request.url);
+  const issue = url.searchParams.get("issue");
+  const margin = Number(url.searchParams.get("margin"));
+  return {
+    minMargin: Number.isFinite(margin) && url.searchParams.has("margin") ? margin : 30,
+    includeDrafts: url.searchParams.get("drafts") === "1",
+    issue: issue && issue in ISSUE_INFO ? (issue as IssueCode) : "all",
+    q: url.searchParams.get("q") ?? "",
+    limit: Math.min(Math.max(Number(url.searchParams.get("limit")) || PAGE_SIZE, PAGE_SIZE), 5000),
+  };
+}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
@@ -25,117 +46,28 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     catalogForPage(session.shop, admin),
     getPlan(session.shop, admin),
   ]);
-  return { ...catalog, plan, upgradeUrl: planSelectionUrl(session.shop) };
+  const filters = filtersFrom(request);
+  const base = { ...catalog, plan, filters, upgradeUrl: planSelectionUrl(session.shop) };
+  if (!catalog.scanId || catalog.count === null) return { ...base, audit: null, cap: null };
+
+  const cap = await planCap(catalog.scanId, catalog.count, VARIANT_LIMIT[plan]);
+  const audit = await auditScan(catalog.scanId, filters, { maxId: cap.maxId, take: filters.limit });
+  return { ...base, audit, cap: { limit: cap.limit, over: cap.over } };
 };
 
-const PAGE_SIZE = 100;
-const ISSUE_CODES = Object.keys(ISSUE_INFO) as IssueCode[];
-
-export default function AuditPage() {
-  const { rows, scannedAt, scan: initialScan, plan, upgradeUrl } =
-    useLoaderData<typeof loader>();
-  const { scan, running, rescan } = useCatalogScan(initialScan, scannedAt);
-
-  if (!rows) {
-    return (
-      <s-page heading="Catalog audit">
-        <ScanProgress scan={scan} onRetry={rescan} />
-      </s-page>
-    );
-  }
-  // The Free plan audits the first FREE_VARIANT_LIMIT variants.
-  const limited = plan === "free" && rows.length > FREE_VARIANT_LIMIT;
-  return (
-    <AuditResults
-      rows={limited ? rows.slice(0, FREE_VARIANT_LIMIT) : rows}
-      scannedAt={scannedAt ?? ""}
-      banner={
-        <>
-          <ScanBanner scan={scan} scannedAt={scannedAt} onRetry={rescan} />
-          {limited && (
-            <s-banner tone="info" heading="Showing your first 500 variants">
-              <s-stack direction="block" gap="small">
-                <s-text>
-                  The Free plan audits up to {FREE_VARIANT_LIMIT} variants. Your
-                  catalog has {rows.length.toLocaleString()}. Upgrade to Pro to
-                  audit all of them; it starts with a 14-day free trial.
-                </s-text>
-                <s-button href={upgradeUrl} target="_top">
-                  See plans
-                </s-button>
-              </s-stack>
-            </s-banner>
-          )}
-        </>
-      }
-      running={running}
-      rescan={rescan}
-    />
-  );
-}
-
-function AuditResults({
-  rows,
-  scannedAt,
-  banner,
-  running,
-  rescan,
-}: {
-  rows: CatalogRow[];
-  scannedAt: string;
-  banner: ReactNode;
-  running: boolean;
-  rescan: () => void;
-}) {
-  const [minMargin, setMinMargin] = useState(30);
-  const [includeDrafts, setIncludeDrafts] = useState(false);
-  const [filter, setFilter] = useState<IssueCode | "all">("all");
-  const [search, setSearch] = useState("");
-  const [limit, setLimit] = useState(PAGE_SIZE);
-
-  const audited = useMemo(
-    () =>
-      auditCatalog(rows, {
-        minMarginPercent: minMargin,
-        includeDrafts,
-        includeArchived: false,
-      }),
-    [rows, minMargin, includeDrafts],
-  );
-
-  const counts = useMemo(() => {
-    const c = Object.fromEntries(ISSUE_CODES.map((k) => [k, 0])) as Record<
-      IssueCode,
-      number
-    >;
-    for (const r of audited) for (const i of r.issues) c[i.code]++;
-    return c;
-  }, [audited]);
-
-  const withIssues = useMemo(
-    () => audited.filter((r) => r.issues.length > 0),
-    [audited],
-  );
-  const criticalCount = withIssues.filter((r) =>
-    r.issues.some((i) => ISSUE_INFO[i.code].severity === "critical"),
-  ).length;
-
-  const visible = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return withIssues.filter(
-      (r) =>
-        (filter === "all" || r.issues.some((i) => i.code === filter)) &&
-        (!q ||
-          variantLabel(r).toLowerCase().includes(q) ||
-          (r.sku ?? "").toLowerCase().includes(q) ||
-          r.vendor.toLowerCase().includes(q)),
-    );
-  }, [withIssues, filter, search]);
-
-  const exportCsv = () => {
-    const lines = visible.flatMap((r) =>
+// Every issue matching the filters, for the CSV download.
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { admin, session } = await authenticate.admin(request);
+  const catalog = await latestCatalog(session.shop);
+  if (!catalog) return { rows: [] };
+  const plan = await getPlan(session.shop, admin);
+  const cap = await planCap(catalog.scanId, catalog.count, VARIANT_LIMIT[plan]);
+  const filters = filtersFrom(request);
+  const { rows } = await auditScan(catalog.scanId, filters, { maxId: cap.maxId, take: EXPORT_LIMIT });
+  return {
+    rows: rows.flatMap((r) =>
       r.issues
-        .filter((i) => filter === "all" || i.code === filter)
+        .filter((i) => filters.issue === "all" || i.code === filters.issue)
         .map((i) => [
           ISSUE_INFO[i.code].severity,
           ISSUE_INFO[i.code].label,
@@ -153,35 +85,53 @@ function AuditResults({
           numericId(r.productId),
           numericId(r.variantId),
         ]),
-    );
-    const csv = toCsv(
-      [
-        "Severity",
-        "Issue",
-        "Detail",
-        "Product",
-        "Variant",
-        "SKU",
-        "Barcode",
-        "Vendor",
-        "Status",
-        "Price",
-        "Cost",
-        "Weight",
-        "Weight unit",
-        "Product ID",
-        "Variant ID",
-      ],
-      lines,
-    );
-    downloadFile(
-      `catalog-audit-${scannedAt.slice(0, 10)}.csv`,
-      csv,
-      "text/csv;charset=utf-8",
-    );
+    ),
+  };
+};
+
+export default function AuditPage() {
+  const data = useLoaderData<typeof loader>();
+  const { scan, running, rescan } = useCatalogScan(data.scan, data.scannedAt);
+  const navigate = useNavigate();
+  const exporter = useFetcher<typeof action>();
+  const { filters, audit, cap } = data;
+  const [search, setSearch] = useState(filters.q);
+  const [margin, setMargin] = useState(String(filters.minMargin));
+
+  const go = (change: Partial<AuditFilters>) => {
+    const next = { ...filters, limit: PAGE_SIZE, ...change };
+    const qs = new URLSearchParams();
+    if (next.minMargin !== 30) qs.set("margin", String(next.minMargin));
+    if (next.includeDrafts) qs.set("drafts", "1");
+    if (next.issue !== "all") qs.set("issue", next.issue);
+    if (next.q) qs.set("q", next.q);
+    if (next.limit !== PAGE_SIZE) qs.set("limit", String(next.limit));
+    navigate(`/app${qs.size ? `?${qs}` : ""}`, { preventScrollReset: true });
   };
 
-  const toneFor = (code: IssueCode) => ISSUE_INFO[code].severity;
+  useEffect(() => {
+    const rows = exporter.data?.rows;
+    if (!rows?.length) return;
+    downloadFile(
+      `catalog-audit-${(data.scannedAt ?? "").slice(0, 10)}.csv`,
+      toCsv(
+        ["Severity", "Issue", "Detail", "Product", "Variant", "SKU", "Barcode", "Vendor", "Status", "Price", "Cost", "Weight", "Weight unit", "Product ID", "Variant ID"],
+        rows,
+      ),
+      "text/csv;charset=utf-8",
+    );
+  }, [exporter.data, data.scannedAt]);
+
+  if (!audit || !cap) {
+    return (
+      <s-page heading="Catalog audit">
+        <ScanProgress scan={scan} onRetry={rescan} />
+      </s-page>
+    );
+  }
+
+  const nextPlan = data.plan === "free" ? "pro" : data.plan === "pro" ? "warehouse" : null;
+  const shownCount = filters.issue === "all" && !filters.q ? audit.withIssues : audit.matching;
 
   return (
     <s-page heading="Catalog audit">
@@ -193,40 +143,58 @@ function AuditResults({
       >
         Rescan catalog
       </s-button>
-      <s-button slot="secondary-actions" onClick={exportCsv}>
+      <s-button
+        slot="secondary-actions"
+        onClick={() =>
+          exporter.submit({}, { method: "POST", action: `/app${window.location.search}` })
+        }
+        {...(exporter.state !== "idle" ? { loading: true } : {})}
+      >
         Export issues (CSV)
       </s-button>
 
-      {banner}
+      <ScanBanner scan={scan} scannedAt={data.scannedAt} onRetry={rescan} />
+      {cap.over && (
+        <s-banner tone="info" heading={`Auditing your first ${cap.limit.toLocaleString()} variants`}>
+          <s-stack direction="block" gap="small">
+            <s-text>
+              The {PLANS[data.plan].name} plan covers up to {cap.limit.toLocaleString()} active and
+              draft variants. Your catalog has {(data.count ?? 0).toLocaleString()}.
+              {nextPlan
+                ? ` ${PLANS[nextPlan].name} covers up to ${VARIANT_LIMIT[nextPlan].toLocaleString()}; every paid plan starts with a 14-day free trial.`
+                : " Contact us for larger catalogs."}
+            </s-text>
+            {nextPlan && (
+              <s-button href={data.upgradeUrl} target="_top">
+                See plans
+              </s-button>
+            )}
+          </s-stack>
+        </s-banner>
+      )}
 
       <s-section heading="Summary">
         <s-stack direction="block" gap="base">
           <s-text>
-            Scanned {audited.length.toLocaleString()} variants ·{" "}
-            {withIssues.length.toLocaleString()} have issues ·{" "}
-            {criticalCount.toLocaleString()} critical · last scan{" "}
-            {new Date(scannedAt).toLocaleString()}
+            Scanned {audit.scanned.toLocaleString()} variants ·{" "}
+            {audit.withIssues.toLocaleString()} have issues ·{" "}
+            {audit.critical.toLocaleString()} critical · last scan{" "}
+            {new Date(data.scannedAt ?? "").toLocaleString()}
           </s-text>
           <s-stack direction="inline" gap="small-200">
             <s-clickable-chip
-              color={filter === "all" ? "strong" : "base"}
-              onClick={() => {
-                setFilter("all");
-                setLimit(PAGE_SIZE);
-              }}
+              color={filters.issue === "all" ? "strong" : "base"}
+              onClick={() => go({ issue: "all" })}
             >
-              All issues ({withIssues.length})
+              All issues ({audit.withIssues.toLocaleString()})
             </s-clickable-chip>
-            {ISSUE_CODES.filter((k) => counts[k] > 0).map((k) => (
+            {ISSUE_CODES.filter((k) => audit.counts[k] > 0).map((k) => (
               <s-clickable-chip
                 key={k}
-                color={filter === k ? "strong" : "base"}
-                onClick={() => {
-                  setFilter(k);
-                  setLimit(PAGE_SIZE);
-                }}
+                color={filters.issue === k ? "strong" : "base"}
+                onClick={() => go({ issue: k })}
               >
-                {ISSUE_INFO[k].label} ({counts[k]})
+                {ISSUE_INFO[k].label} ({audit.counts[k].toLocaleString()})
               </s-clickable-chip>
             ))}
           </s-stack>
@@ -238,14 +206,12 @@ function AuditResults({
           <s-search-field
             label="Search"
             labelAccessibilityVisibility="exclusive"
-            placeholder="Search by product, SKU or vendor"
+            placeholder="Search by product, SKU or vendor, then press Enter"
             value={search}
-            onInput={(e) => {
-              setSearch(e.currentTarget.value);
-              setLimit(PAGE_SIZE);
-            }}
+            onInput={(e) => setSearch(e.currentTarget.value)}
+            onChange={(e) => go({ q: e.currentTarget.value.trim() })}
           />
-          {visible.length === 0 ? (
+          {audit.rows.length === 0 ? (
             <s-paragraph>No issues match. Nice work.</s-paragraph>
           ) : (
             <s-table>
@@ -258,7 +224,7 @@ function AuditResults({
                 <s-table-header listSlot="inline">Issues</s-table-header>
               </s-table-header-row>
               <s-table-body>
-                {visible.slice(0, limit).map((r) => (
+                {audit.rows.map((r) => (
                   <s-table-row key={r.variantId}>
                     <s-table-cell>
                       <s-link
@@ -270,9 +236,7 @@ function AuditResults({
                     </s-table-cell>
                     <s-table-cell>{r.sku ?? "—"}</s-table-cell>
                     <s-table-cell>${r.price.toFixed(2)}</s-table-cell>
-                    <s-table-cell>
-                      {r.cost === null ? "—" : `$${r.cost.toFixed(2)}`}
-                    </s-table-cell>
+                    <s-table-cell>{r.cost === null ? "—" : `$${r.cost.toFixed(2)}`}</s-table-cell>
                     <s-table-cell>
                       {r.weight ? `${r.weight} ${r.weightUnit?.toLowerCase()}` : "—"}
                     </s-table-cell>
@@ -280,7 +244,7 @@ function AuditResults({
                       <s-stack direction="block" gap="small-300">
                         {r.issues.map((i) => (
                           <s-stack key={i.code} direction="inline" gap="small-300">
-                            <s-badge tone={toneFor(i.code)}>
+                            <s-badge tone={ISSUE_INFO[i.code].severity}>
                               {ISSUE_INFO[i.code].label}
                             </s-badge>
                             <s-text color="subdued">{i.detail}</s-text>
@@ -293,9 +257,9 @@ function AuditResults({
               </s-table-body>
             </s-table>
           )}
-          {visible.length > limit && (
-            <s-button onClick={() => setLimit(limit + PAGE_SIZE)}>
-              Show more ({(visible.length - limit).toLocaleString()} left)
+          {shownCount > audit.rows.length && (
+            <s-button onClick={() => go({ limit: filters.limit + PAGE_SIZE })}>
+              Show more ({(shownCount - audit.rows.length).toLocaleString()} left)
             </s-button>
           )}
         </s-stack>
@@ -305,20 +269,18 @@ function AuditResults({
         <s-stack direction="block" gap="base">
           <s-number-field
             label="Minimum margin target (%)"
-            value={String(minMargin)}
+            value={margin}
             min={0}
             max={100}
-            onChange={(e) =>
-              setMinMargin(Number(e.currentTarget.value) || 0)
-            }
+            onInput={(e) => setMargin(e.currentTarget.value)}
+            onChange={(e) => go({ minMargin: Number(e.currentTarget.value) || 0 })}
           />
           <s-checkbox
             label="Include draft products"
-            checked={includeDrafts}
-            onChange={(e) =>
-              setIncludeDrafts(e.currentTarget.checked)
-            }
+            checked={filters.includeDrafts}
+            onChange={(e) => go({ includeDrafts: e.currentTarget.checked })}
           />
+          <s-text color="subdued">Archived products are never audited.</s-text>
         </s-stack>
       </s-section>
 

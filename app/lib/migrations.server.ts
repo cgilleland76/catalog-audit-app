@@ -234,6 +234,7 @@ DROP COLUMN "results",
 DROP COLUMN "skus",
 ADD COLUMN     "mismatchCount" INTEGER NOT NULL DEFAULT 0,
 ADD COLUMN     "rowCursor" BIGINT NOT NULL DEFAULT 0,
+ADD COLUMN     "maxRowId" BIGINT,
 ADD COLUMN     "scanId" TEXT NOT NULL,
 ADD COLUMN     "scope" TEXT NOT NULL DEFAULT 'active',
 ADD COLUMN     "skuCursor" TEXT,
@@ -248,6 +249,7 @@ ADD COLUMN     "url" TEXT;
 
 -- AlterTable
 ALTER TABLE "SyncSetting" ADD COLUMN     "scope" TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE "SyncSetting" ADD COLUMN "leaseUntil" TIMESTAMP(3);
 
 -- CreateTable
 CREATE TABLE "WmsFound" (

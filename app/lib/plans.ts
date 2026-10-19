@@ -14,13 +14,13 @@ export const PLANS: Record<
   pro: {
     name: "Pro",
     price: "$14.99/month",
-    features: ["Unlimited catalog audit", "Wholesale line sheets"],
+    features: ["Catalog audit for up to 10,000 variants", "Wholesale line sheets"],
   },
   warehouse: {
     name: "Warehouse",
     price: "$39/month",
     features: [
-      "Everything in Pro",
+      "Everything in Pro, for up to 100,000 variants",
       "Warehouse comparison (ShipHero, more coming)",
       "Fix in Shopify with Undo",
       "Scheduled sync",
@@ -30,6 +30,16 @@ export const PLANS: Record<
 };
 
 export const FREE_VARIANT_LIMIT = 500;
+
+/**
+ * Active and draft variants each plan covers (archived products are ignored).
+ * Larger catalogs are audited, compared and listed up to the limit.
+ */
+export const VARIANT_LIMIT: Record<PlanId, number> = {
+  free: FREE_VARIANT_LIMIT,
+  pro: 10_000,
+  warehouse: 100_000,
+};
 
 export const canUseLineSheets = (plan: PlanId) => plan !== "free";
 export const canUseWarehouse = (plan: PlanId) => plan === "warehouse";

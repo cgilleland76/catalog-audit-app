@@ -6,7 +6,7 @@ import { getScanState, startScan, type Scope } from "./catalog.server";
 import { FIX_FIELDS, FREQUENCIES, type FixField, type Frequency } from "./fixes";
 import { advanceFix, createFixBatch } from "./fixes.server";
 import { getPlan } from "./plans.server";
-import { canUseWarehouse } from "./plans";
+import { canUseWarehouse, VARIANT_LIMIT } from "./plans";
 import {
   advanceComparison,
   createComparison,
@@ -167,7 +167,11 @@ export async function advanceSync(setting: Setting, until: number): Promise<void
       const scan = s.scanId
         ? await prisma.catalogScan.findUnique({ where: { id: s.scanId } })
         : null;
-      if (scan?.status === "running") return; // Shopify is still exporting
+      if (scan?.status === "running") {
+        // Shopify is still exporting; check again in a few seconds.
+        await sleep(4000);
+        continue;
+      }
       if (scan?.status === "importing") {
         await pauseIfIdle(stepStart);
         continue;
@@ -181,7 +185,13 @@ export async function advanceSync(setting: Setting, until: number): Promise<void
       });
       let comparisonId = running?.id;
       if (!comparisonId) {
-        const created = await createComparison(shop, getProvider(s.provider), s.scope as Scope);
+        const plan = await getPlan(shop, admin);
+        const created = await createComparison(
+          shop,
+          getProvider(s.provider),
+          s.scope as Scope,
+          VARIANT_LIMIT[plan],
+        );
         if (!created) {
           await finish(s, "failed", "Couldn't read the Shopify catalog");
           return;
@@ -277,6 +287,52 @@ export async function advanceSync(setting: Setting, until: number): Promise<void
     await finish(s, "failed", `Unknown stage ${s.stage}`);
     return;
   }
+}
+
+const dueWhere = () => ({
+  enabled: true,
+  OR: [{ stage: { not: "idle" } }, { nextRunAt: { lte: new Date() } }],
+});
+
+/** Syncs that are due or in progress (for the hourly dispatcher). */
+export const dueSettings = (take = 500) =>
+  prisma.syncSetting.findMany({
+    where: dueWhere(),
+    orderBy: { nextRunAt: "asc" },
+    take,
+    select: { id: true, shop: true, provider: true },
+  });
+
+const LEASE_MS = 15 * 60_000;
+
+/** Gives one background worker a sync for up to 15 minutes; false if taken. */
+export async function claimLease(settingId: string) {
+  const now = new Date();
+  const claimed = await prisma.syncSetting.updateMany({
+    where: { id: settingId, OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }] },
+    data: { leaseUntil: new Date(now.getTime() + LEASE_MS) },
+  });
+  return claimed.count > 0;
+}
+
+export const releaseLease = (settingId: string) =>
+  prisma.syncSetting.updateMany({ where: { id: settingId }, data: { leaseUntil: null } });
+
+/**
+ * Advances one sync for up to `budgetMs` (a background worker calls this in a
+ * loop). Returns true while the sync still has work to do.
+ */
+export async function runOne(settingId: string, budgetMs = 20_000) {
+  const setting = await prisma.syncSetting.findFirst({ where: { id: settingId, ...dueWhere() } });
+  if (!setting) return false;
+  try {
+    await advanceSync(setting, Date.now() + budgetMs - 7000);
+  } catch (error) {
+    const current = await prisma.syncSetting.findUnique({ where: { id: setting.id } });
+    await finish(current ?? setting, "failed", error instanceof Error ? error.message : String(error));
+  }
+  const after = await prisma.syncSetting.findUnique({ where: { id: settingId } });
+  return !!after && after.enabled && after.stage !== "idle";
 }
 
 /** Advances due and in-progress syncs for up to `budgetMs`. */

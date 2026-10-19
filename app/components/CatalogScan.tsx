@@ -22,7 +22,7 @@ export function useCatalogScan(initial: ScanState | null, scannedAt: string | nu
 
   // Earlier arguments win ties: the latest poll knows more than the loader.
   const scan = newest(poll.data?.scan, starter.data?.scan, initial);
-  const running = scan?.status === "running";
+  const running = scan?.status === "running" || scan?.status === "importing";
 
   useEffect(() => {
     if (!running) return;
@@ -48,6 +48,16 @@ export function useCatalogScan(initial: ScanState | null, scannedAt: string | nu
   };
 }
 
+/** What the scan is doing now, in a few words. */
+const progressText = (scan: ScanState) =>
+  scan.status === "importing"
+    ? `Saving ${scan.objectCount.toLocaleString()} variants${
+        scan.progress !== null ? ` · ${Math.round(scan.progress * 100)}%` : ""
+      }`
+    : scan.objectCount > 0
+      ? `${scan.objectCount.toLocaleString()} variants read so far`
+      : "Starting the export";
+
 const elapsed = (since: string) => {
   const secs = Math.max(0, Math.round((Date.now() - Date.parse(since)) / 1000));
   return secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`;
@@ -68,9 +78,7 @@ export function ScanProgress({
         <s-spinner accessibilityLabel="Reading your catalog" size="large" />
         <s-heading>Reading your catalog…</s-heading>
         <s-text>
-          {scan && scan.objectCount > 0
-            ? `${scan.objectCount.toLocaleString()} variants read so far`
-            : "Starting the export"}
+          {scan ? progressText(scan) : "Starting the export"}
           {scan ? ` · ${elapsed(scan.startedAt)}` : ""}
         </s-text>
         <s-text color="subdued">
@@ -94,17 +102,13 @@ export function ScanBanner({
   onRetry: () => void;
 }) {
   if (scan?.status === "failed") return <ScanFailed scan={scan} onRetry={onRetry} />;
-  if (scan?.status !== "running") return null;
+  if (scan?.status !== "running" && scan?.status !== "importing") return null;
   return (
     <s-banner tone="info">
       <s-stack direction="inline" gap="base" alignItems="center">
         <s-spinner accessibilityLabel="Rescanning" size="base" />
         <s-text>
-          Rescanning your catalog
-          {scan.objectCount > 0
-            ? ` — ${scan.objectCount.toLocaleString()} variants read so far`
-            : ""}
-          . Showing results from{" "}
+          Rescanning your catalog — {progressText(scan).toLowerCase()}. Showing results from{" "}
           {scannedAt ? new Date(scannedAt).toLocaleString() : "the last scan"}{" "}
           until it finishes.
         </s-text>
