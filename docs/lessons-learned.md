@@ -38,6 +38,7 @@ Read this before changing anything. Each entry is a mistake already made once.
 | `productVariantsBulkUpdate` rejected every variant of a product when one change was invalid | `allowPartialUpdates` defaults to false | Pass `allowPartialUpdates: true`; Fix reads each change back to confirm it saved |
 | ShipBob sandbox sign-up refused; Veeqo has no API key section | Vendor gates API access | Email ShipBob support; ask Veeqo support to enable API access |
 | 502/504 on the Catalog and Warehouse pages for a large store (Pink Lily) | The whole catalog was stored as one JSON blob and loaded into every request, and comparison results were one blob too; big catalogs ran out of memory and time | Store one row per variant (`CatalogVariant`, `WmsMismatch`), import the bulk export in Range-request steps, and page/filter on the server. Never load a whole catalog into one request |
+| A page showed only "200" after a deploy while the app was open | The app reloaded without `shop`/`host`, Shopify answered with its App Bridge reload page as a thrown 200 response, and `boundary.error` checks the error's class name, which the production browser build minifies | `app.tsx` ErrorBoundary renders any route error response itself (`isRouteErrorResponse`) and leaves the rest to `boundary.error` |
 | Netlify Database bill kept growing with no traffic | The every-5-minutes scheduled function kept the database awake | Scheduler runs hourly and hands each due sync to its own background function |
 
 ## Secrets

@@ -1,6 +1,12 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useEffect } from "react";
-import { Outlet, useLoaderData, useNavigation, useRouteError } from "react-router";
+import {
+  isRouteErrorResponse,
+  Outlet,
+  useLoaderData,
+  useNavigation,
+  useRouteError,
+} from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
@@ -45,8 +51,15 @@ function NavigationLoading() {
 }
 
 // Shopify needs React Router to catch some thrown responses, so that their headers are included in the response.
+// boundary.error recognises those responses by class name, which the production
+// browser build shortens, so the page showed a bare "200" (e.g. App Bridge's
+// reload page after a deploy). Check the type instead.
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  const error = useRouteError();
+  if (isRouteErrorResponse(error)) {
+    return <div dangerouslySetInnerHTML={{ __html: error.data || "Handling response" }} />;
+  }
+  return boundary.error(error);
 }
 
 export const headers: HeadersFunction = (headersArgs) => {
