@@ -1,10 +1,8 @@
 import type { AdminApiContext } from "@shopify/shopify-app-react-router/server";
 
 import prisma from "../db.server";
-import type { CatalogRow } from "./catalog";
 import { FIELD_OF, fixableField, type FixField, UNDO_DAYS } from "./fixes";
 import { TO_LB } from "./wms/index.server";
-import type { Mismatch } from "./wms/types";
 
 // "Fix in Shopify": copies warehouse values into Shopify, saving each old value
 // first so the whole batch can be undone. Like comparisons, a batch advances in
@@ -181,8 +179,7 @@ async function readVariants(admin: AdminApiContext, ids: string[]) {
 export async function createFixBatch(opts: {
   shop: string;
   provider: string;
-  comparisonId: string | null;
-  results: Mismatch[];
+  comparisonId: string;
   fields: FixField[];
   source: "manual" | "sync";
 }) {
@@ -191,24 +188,9 @@ export async function createFixBatch(opts: {
   });
   if (active) return { error: "Another fix is still running; wait for it to finish." };
 
-  const items = opts.results.flatMap((m) => {
-    const field = fixableField(m);
-    if (!field || !opts.fields.includes(field)) return [];
-    const newValue: Value = field === "weight" ? { lb: Number(m.target) } : field === "cost" ? Number(m.target) : String(m.target);
-    return [
-      {
-        shop: opts.shop,
-        variantId: m.variantId,
-        productId: m.productId,
-        sku: m.sku,
-        label: m.label,
-        field,
-        newValue: JSON.stringify(newValue),
-      },
-    ];
-  });
-  if (items.length === 0) return { error: "Nothing to fix for the chosen fields." };
-
+  const codes = (Object.keys(FIELD_OF) as (keyof typeof FIELD_OF)[]).filter((code) =>
+    opts.fields.includes(FIELD_OF[code]!),
+  );
   const batch = await prisma.fixBatch.create({
     data: {
       shop: opts.shop,
@@ -216,11 +198,23 @@ export async function createFixBatch(opts: {
       comparisonId: opts.comparisonId,
       source: opts.source,
       status: "applying",
-      total: items.length,
     },
   });
-  await prisma.fixItem.createMany({ data: items.map((i) => ({ ...i, batchId: batch.id })) });
-  return { batch };
+  // One item per fixable difference, straight from the comparison's table.
+  // Weight targets are pounds, stored as { lb }; cost and barcode as is.
+  const total = await prisma.$executeRaw`
+    INSERT INTO "FixItem" ("id", "shop", "batchId", "variantId", "productId", "sku", "label", "field", "newValue", "status")
+    SELECT gen_random_uuid()::text, "shop", ${batch.id}, "variantId", "productId", "sku", "label",
+      CASE "code" WHEN 'weight_mismatch' THEN 'weight' WHEN 'cost_mismatch' THEN 'cost' ELSE 'barcode' END,
+      CASE "code" WHEN 'weight_mismatch' THEN '{"lb":' || "target" || '}' ELSE "target" END,
+      'pending'
+    FROM "WmsMismatch"
+    WHERE "comparisonId" = ${opts.comparisonId} AND "target" IS NOT NULL AND "code" = ANY(${codes})`;
+  if (total === 0) {
+    await prisma.fixBatch.delete({ where: { id: batch.id } });
+    return { error: "Nothing to fix for the chosen fields." };
+  }
+  return { batch: await prisma.fixBatch.update({ where: { id: batch.id }, data: { total } }) };
 }
 
 /**
@@ -458,9 +452,12 @@ async function updateSavedCopies(
     where: { shop, status: "done" },
     orderBy: { startedAt: "desc" },
   });
-  if (scan?.rows) {
-    const rows = JSON.parse(scan.rows) as CatalogRow[];
+  if (scan) {
+    const rows = await prisma.catalogVariant.findMany({
+      where: { scanId: scan.id, variantId: { in: [...new Set(done.map((d) => d.item.variantId))] } },
+    });
     const byId = new Map(rows.map((r) => [r.variantId, r]));
+    const updates = [];
     for (const { item } of done) {
       const row = byId.get(item.variantId);
       if (!row) continue;
@@ -468,7 +465,8 @@ async function updateSavedCopies(
       const value = raw ? (JSON.parse(raw) as Value) : null;
       if (item.field === "weight") {
         const lb = lbOf(value);
-        const unit = value && typeof value === "object" && "unit" in value ? value.unit : row.weightUnit ?? "POUNDS";
+        const unit =
+          value && typeof value === "object" && "unit" in value ? value.unit : (row.weightUnit ?? "POUNDS");
         row.weight = lb === null ? null : Number((lb / (TO_LB[unit] ?? 1)).toFixed(4));
         row.weightUnit = lb === null ? row.weightUnit : unit;
       } else if (item.field === "cost") {
@@ -476,23 +474,37 @@ async function updateSavedCopies(
       } else {
         row.barcode = typeof value === "string" ? value : null;
       }
+      updates.push(row);
     }
-    await prisma.catalogScan.update({ where: { id: scan.id }, data: { rows: JSON.stringify(rows) } });
+    await prisma.$transaction(
+      updates.map((r) =>
+        prisma.catalogVariant.update({
+          where: { id: r.id },
+          data: { weight: r.weight, weightUnit: r.weightUnit, cost: r.cost, barcode: r.barcode },
+        }),
+      ),
+    );
   }
 
   // Fixed differences drop out of the comparison; an undo needs a new comparison.
   if (comparisonId && !undo) {
-    const comparison = await prisma.wmsComparison.findUnique({ where: { id: comparisonId } });
-    if (comparison?.results) {
-      const fixed = new Set(done.map(({ item }) => `${item.variantId}:${item.field}`));
-      const results = (JSON.parse(comparison.results) as Mismatch[]).filter(
-        (m) => !fixed.has(`${m.variantId}:${FIELD_OF[m.code] ?? ""}`),
-      );
-      await prisma.wmsComparison.update({
-        where: { id: comparisonId },
-        data: { results: JSON.stringify(results) },
-      });
+    const byField = new Map<string, string[]>();
+    for (const { item } of done) {
+      byField.set(item.field, [...(byField.get(item.field) ?? []), item.variantId]);
     }
+    await prisma.$transaction(
+      [...byField].map(([field, variantIds]) =>
+        prisma.wmsMismatch.deleteMany({
+          where: {
+            comparisonId,
+            code: `${field}_mismatch`,
+            variantId: { in: variantIds },
+          },
+        }),
+      ),
+    );
+    const left = await prisma.wmsMismatch.count({ where: { comparisonId } });
+    await prisma.wmsComparison.update({ where: { id: comparisonId }, data: { mismatchCount: left } });
   }
 }
 
@@ -521,10 +533,19 @@ export async function pruneHistory(shop: string) {
     prisma.fixItem.deleteMany({ where: { batchId: { in: ids } } }),
     prisma.fixBatch.deleteMany({ where: { id: { in: ids } } }),
     prisma.syncRun.deleteMany({ where: { shop, startedAt: { lt: cutoff } } }),
-    prisma.wmsComparison.deleteMany({
-      where: { shop, startedAt: { lt: cutoff }, id: { notIn: latest.map((c) => c.id) } },
-    }),
   ]);
+  const oldComparisons = await prisma.wmsComparison.findMany({
+    where: { shop, startedAt: { lt: cutoff }, id: { notIn: latest.map((c) => c.id) } },
+    select: { id: true },
+  });
+  const cids = oldComparisons.map((c) => c.id);
+  if (cids.length) {
+    await prisma.$transaction([
+      prisma.wmsMismatch.deleteMany({ where: { comparisonId: { in: cids } } }),
+      prisma.wmsFound.deleteMany({ where: { comparisonId: { in: cids } } }),
+      prisma.wmsComparison.deleteMany({ where: { id: { in: cids } } }),
+    ]);
+  }
 }
 
 /** Recent batches for one warehouse system, after pruning expired history. */

@@ -135,6 +135,7 @@ export const shipbob: WmsProvider = {
   id: "shipbob",
   name: "ShipBob",
   comparesCost: true,
+  pagesCatalog: true,
   compareNotes: ["Cost is compared with each product's customs value in ShipBob"],
   setupHelp:
     "Create a Personal Access Token in ShipBob (Integrations → API Tokens). For ShipBob's test environment, type sandbox in Environment.",

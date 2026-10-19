@@ -200,6 +200,7 @@ export const shiphero: WmsProvider = {
   id: "shiphero",
   name: "ShipHero",
   comparesCost: true,
+  pagesCatalog: false,
   compareNotes: [
     "Kits with no weight or cost of their own use the sum of their components",
   ],

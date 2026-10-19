@@ -81,6 +81,7 @@ export const cin7: WmsProvider = {
   id: "cin7",
   name: "Cin7 Core",
   comparesCost: true,
+  pagesCatalog: true,
   compareNotes: ["Cost is the product's average cost in Cin7 Core (or its supplier price)"],
   setupHelp:
     "In Cin7 Core, go to Integrations → API and choose + to create an API application. Copy its Account ID and Application Key.",

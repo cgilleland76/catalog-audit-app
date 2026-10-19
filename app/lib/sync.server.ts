@@ -2,7 +2,7 @@ import type { AdminApiContext } from "@shopify/shopify-app-react-router/server";
 
 import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
-import { getScanState, loadCatalog, startScan } from "./catalog.server";
+import { getScanState, startScan, type Scope } from "./catalog.server";
 import { FIX_FIELDS, FREQUENCIES, type FixField, type Frequency } from "./fixes";
 import { advanceFix, createFixBatch } from "./fixes.server";
 import { getPlan } from "./plans.server";
@@ -14,7 +14,6 @@ import {
   loadCredentials,
   PROVIDERS,
 } from "./wms/index.server";
-import type { Mismatch } from "./wms/types";
 
 // Scheduled sync: for each enabled warehouse connection that is due, read the
 // catalog again, compare it with the warehouse and, if chosen, fix the chosen
@@ -45,7 +44,7 @@ export const parseFields = (raw: string | null | undefined): FixField[] => {
 export async function saveSyncSetting(
   shop: string,
   provider: string,
-  opts: { enabled: boolean; frequency: string; fixFields: FixField[] },
+  opts: { enabled: boolean; frequency: string; fixFields: FixField[]; scope?: string },
 ) {
   const frequency = opts.frequency in FREQUENCIES ? opts.frequency : "daily";
   const existing = await prisma.syncSetting.findUnique({
@@ -61,6 +60,7 @@ export async function saveSyncSetting(
     enabled: opts.enabled,
     frequency,
     fixFields: JSON.stringify(opts.fixFields),
+    scope: opts.scope === "active_draft" ? "active_draft" : "active",
     nextRunAt,
     ...(opts.enabled
       ? {}
@@ -162,11 +162,16 @@ export async function advanceSync(setting: Setting, until: number): Promise<void
     }
 
     if (s.stage === "scanning") {
-      await getScanState(shop, admin); // checks on the running export
+      const stepStart = Date.now();
+      await getScanState(shop, admin); // checks the export, or imports the next part
       const scan = s.scanId
         ? await prisma.catalogScan.findUnique({ where: { id: s.scanId } })
         : null;
       if (scan?.status === "running") return; // Shopify is still exporting
+      if (scan?.status === "importing") {
+        await pauseIfIdle(stepStart);
+        continue;
+      }
       if (scan?.status === "failed") {
         await finish(s, "failed", scan.error ?? "Couldn't read the Shopify catalog");
         return;
@@ -176,13 +181,12 @@ export async function advanceSync(setting: Setting, until: number): Promise<void
       });
       let comparisonId = running?.id;
       if (!comparisonId) {
-        const catalog = await loadCatalog(shop);
-        if (!catalog) {
+        const created = await createComparison(shop, getProvider(s.provider), s.scope as Scope);
+        if (!created) {
           await finish(s, "failed", "Couldn't read the Shopify catalog");
           return;
         }
-        const live = catalog.rows.filter((r) => r.status !== "ARCHIVED");
-        comparisonId = (await createComparison(shop, getProvider(s.provider), live)).id;
+        comparisonId = created.id;
       }
       s = await prisma.syncSetting.update({
         where: { id: s.id },
@@ -201,7 +205,7 @@ export async function advanceSync(setting: Setting, until: number): Promise<void
         return;
       }
       const stepStart = Date.now();
-      await advanceComparison(s.comparisonId, async () => (await loadCatalog(shop))?.rows ?? null);
+      await advanceComparison(s.comparisonId);
       const comparison = await prisma.wmsComparison.findUnique({ where: { id: s.comparisonId } });
       if (!comparison || comparison.status === "failed") {
         await finish(s, "failed", comparison?.error ?? "The comparison failed");
@@ -212,17 +216,16 @@ export async function advanceSync(setting: Setting, until: number): Promise<void
         continue;
       }
 
-      const results = comparison.results ? (JSON.parse(comparison.results) as Mismatch[]) : [];
+      const differences = comparison.mismatchCount.toLocaleString();
       const fields = parseFields(s.fixFields);
       if (fields.length === 0) {
-        await finish(s, "done", `${results.length.toLocaleString()} differences found`);
+        await finish(s, "done", `${differences} differences found`);
         return;
       }
       const created = await createFixBatch({
         shop,
         provider: s.provider,
         comparisonId: comparison.id,
-        results,
         fields,
         source: "sync",
       });
@@ -231,7 +234,7 @@ export async function advanceSync(setting: Setting, until: number): Promise<void
         await finish(
           s,
           "done",
-          `${results.length.toLocaleString()} differences found; ${created.error ?? "nothing to fix"}`,
+          `${differences} differences found; ${created.error ?? "nothing to fix"}`,
         );
         return;
       }

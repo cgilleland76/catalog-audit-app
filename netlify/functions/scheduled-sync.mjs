@@ -1,5 +1,5 @@
 /* eslint-env node */
-// Netlify scheduled function: every 5 minutes, asks the app to advance due
+// Netlify scheduled function: every hour, asks the app to advance due
 // scheduled syncs (app/routes/internal.sync.tsx). Scheduled functions run only
 // on each site's published production deploy, and for at most 30 seconds.
 import { createHmac } from "node:crypto";
@@ -21,4 +21,4 @@ export default async () => {
   console.log(`[scheduled-sync] ${response.status} ${await response.text()}`);
 };
 
-export const config = { schedule: "*/5 * * * *" };
+export const config = { schedule: "@hourly" };

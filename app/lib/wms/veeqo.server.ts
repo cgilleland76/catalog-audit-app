@@ -72,6 +72,7 @@ export const veeqo: WmsProvider = {
   id: "veeqo",
   name: "Veeqo",
   comparesCost: true,
+  pagesCatalog: true,
   compareNotes: ["Cost is each product's cost price in Veeqo"],
   setupHelp:
     "In Veeqo, go to Settings → Users, click the pencil next to your user, and choose Refresh API Key in the API Key section. The key is shown only once. No API Key section? Ask Veeqo support to enable API access for your account.",

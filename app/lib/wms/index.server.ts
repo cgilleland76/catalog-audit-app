@@ -1,12 +1,21 @@
 import prisma from "../../db.server";
 import { decryptJson, encryptJson } from "../crypto.server";
 import type { CatalogRow } from "../catalog";
+import {
+  latestCatalog,
+  scopeStatuses,
+  skuKey,
+  variantPage,
+  type Scope,
+} from "../catalog.server";
 import { shiphero } from "./shiphero.server";
 import { shipbob } from "./shipbob.server";
 import { cin7 } from "./cin7.server";
 import { veeqo } from "./veeqo.server";
+import { MISMATCH_INFO } from "./types";
 import type {
   Mismatch,
+  MismatchCode,
   WmsProduct,
   WmsCredentials,
   WmsProvider,
@@ -125,40 +134,64 @@ export function compareRows(
   return out;
 }
 
-/** Creates a comparison for every SKU in the catalog; steps do the work. */
+/** Creates a comparison of the latest catalog scan; steps do the work. */
 export async function createComparison(
   shop: string,
   provider: WmsProvider,
-  rows: CatalogRow[],
+  scope: Scope,
 ) {
-  const skus = [
-    ...new Set(rows.map((r) => r.sku?.trim()).filter((s): s is string => !!s)),
-  ];
+  const catalog = await latestCatalog(shop);
+  if (!catalog) return null;
+  const [{ count }] = await prisma.$queryRaw<{ count: bigint }[]>`
+    SELECT COUNT(DISTINCT "skuKey") AS count FROM "CatalogVariant"
+    WHERE "scanId" = ${catalog.scanId} AND "skuKey" IS NOT NULL
+      AND "status" = ANY(${scopeStatuses(scope)})`;
   return prisma.wmsComparison.create({
     data: {
       shop,
       provider: provider.id,
+      scanId: catalog.scanId,
+      scope,
       status: "running",
-      skus: JSON.stringify(skus),
-      found: "{}",
-      total: skus.length,
+      stage: "lookup",
+      total: Number(count),
     },
+  });
+}
+
+/** Distinct SKUs (original spelling) after `afterKey`, in key order. */
+async function nextSkus(scanId: string, statuses: string[], afterKey: string | null, limit: number) {
+  return prisma.$queryRaw<{ skuKey: string; sku: string }[]>`
+    SELECT "skuKey", MIN("sku") AS sku FROM "CatalogVariant"
+    WHERE "scanId" = ${scanId} AND "skuKey" IS NOT NULL
+      AND "status" = ANY(${statuses}) AND "skuKey" > ${afterKey ?? ""}
+    GROUP BY "skuKey" ORDER BY "skuKey" LIMIT ${limit}`;
+}
+
+async function saveFound(comparisonId: string, found: WmsProduct[]) {
+  if (!found.length) return;
+  await prisma.wmsFound.createMany({
+    data: found.map((p) => ({
+      comparisonId,
+      skuKey: p.sku.trim().toLowerCase(),
+      data: JSON.stringify(p),
+    })),
+    skipDuplicates: true,
   });
 }
 
 // Each step must finish well inside the serverless request limit.
 const STEP_MS = 6000;
 const LOCK_MS = 15000;
+const LOOKUP_BATCH = 500;
+const COMPARE_BATCH = 2000;
 
 /**
- * Looks up the next SKUs for a running comparison and saves progress. When
- * every SKU is checked, compares against the latest catalog and finishes.
- * Safe to call from overlapping requests: only one step runs at a time.
+ * Runs the next few seconds of a comparison: looking SKUs up in the warehouse,
+ * then comparing the catalog with what was found, a batch of variants at a
+ * time. Safe to call from overlapping requests: only one step runs at a time.
  */
-export async function advanceComparison(
-  comparisonId: string,
-  loadRows: () => Promise<CatalogRow[] | null>,
-) {
+export async function advanceComparison(comparisonId: string) {
   const now = new Date();
   const claimed = await prisma.wmsComparison.updateMany({
     where: {
@@ -170,69 +203,148 @@ export async function advanceComparison(
   });
   if (claimed.count === 0) return;
 
-  const comparison = await prisma.wmsComparison.findUniqueOrThrow({
-    where: { id: comparisonId },
-  });
-  const finish = (data: Parameters<typeof prisma.wmsComparison.update>[0]["data"]) =>
-    prisma.wmsComparison.update({
-      where: { id: comparisonId },
-      data: { ...data, lockedUntil: null },
-    });
+  let c = await prisma.wmsComparison.findUniqueOrThrow({ where: { id: comparisonId } });
+  const save = (data: Parameters<typeof prisma.wmsComparison.update>[0]["data"]) =>
+    prisma.wmsComparison.update({ where: { id: comparisonId }, data });
+  const deadline = Date.now() + STEP_MS;
+  const statuses = scopeStatuses(c.scope);
 
   try {
-    const provider = getProvider(comparison.provider);
-    const credentials = await loadCredentials(comparison.shop, comparison.provider);
-    if (!credentials) {
-      await finish({ status: "failed", error: `${provider.name} is disconnected`, finishedAt: new Date() });
-      return;
+    const provider = getProvider(c.provider);
+    if (c.stage === "lookup") {
+      const credentials = await loadCredentials(c.shop, c.provider);
+      if (!credentials) {
+        await save({ status: "failed", error: `${provider.name} is disconnected`, finishedAt: new Date(), lockedUntil: null });
+        return;
+      }
+      if (provider.pagesCatalog) {
+        // The provider pages its own catalog and needs every SKU to match against.
+        const all = await nextSkus(c.scanId, statuses, null, 10_000_000);
+        const result = await provider.lookup(credentials, all.map((r) => r.sku), deadline, c.cursor);
+        await saveFound(c.id, result.found);
+        const done = !result.cursor;
+        c = await save({
+          cursor: result.cursor ?? null,
+          checked: done ? c.total : c.checked,
+          ...(done ? { stage: "compare", rowCursor: 0n } : {}),
+        });
+      } else {
+        while (c.checked < c.total && Date.now() + 1500 < deadline) {
+          const batch = await nextSkus(c.scanId, statuses, c.skuCursor, LOOKUP_BATCH);
+          if (!batch.length) break;
+          const result = await provider.lookup(credentials, batch.map((r) => r.sku), deadline, null);
+          await saveFound(c.id, result.found);
+          if (result.processed === 0) break;
+          c = await save({
+            checked: c.checked + result.processed,
+            skuCursor: batch[result.processed - 1].skuKey,
+          });
+          if (result.processed < batch.length) break; // out of time inside lookup
+        }
+        const remaining = await nextSkus(c.scanId, statuses, c.skuCursor, 1);
+        if (!remaining.length) {
+          c = await save({ checked: c.total, stage: "compare", rowCursor: 0n });
+        }
+      }
     }
 
-    const skus = JSON.parse(comparison.skus ?? "[]") as string[];
-    const found = JSON.parse(comparison.found ?? "{}") as Record<string, WmsProduct>;
-    let checked = comparison.checked;
-    let cursor = comparison.cursor;
-
-    if (checked < skus.length) {
-      const result = await provider.lookup(
-        credentials,
-        skus.slice(checked),
-        Date.now() + STEP_MS,
-        cursor,
-      );
-      for (const p of result.found) found[p.sku.trim().toLowerCase()] = p;
-      checked += result.processed;
-      cursor = result.cursor ?? null;
+    while (c.stage === "compare" && Date.now() + 1500 < deadline) {
+      const rows = await variantPage(c.scanId, { after: c.rowCursor, size: COMPARE_BATCH, statuses });
+      if (!rows.length) {
+        await save({ status: "done", finishedAt: new Date(), lockedUntil: null });
+        return;
+      }
+      const keys = [...new Set(rows.map((r) => skuKey(r.sku)).filter((k): k is string => !!k))];
+      const found = await prisma.wmsFound.findMany({
+        where: { comparisonId: c.id, skuKey: { in: keys } },
+      });
+      const map = new Map(found.map((f) => [f.skuKey, JSON.parse(f.data) as WmsProduct]));
+      const mismatches = compareRows(rows, map, provider.name);
+      await prisma.$transaction([
+        prisma.wmsMismatch.createMany({
+          data: mismatches.map((m) => ({
+            comparisonId: c.id,
+            shop: c.shop,
+            code: m.code,
+            variantId: m.variantId,
+            productId: m.productId,
+            label: m.label,
+            sku: m.sku,
+            shopify: m.shopify,
+            wms: m.wms,
+            target: m.target === undefined || m.target === null ? null : JSON.stringify(m.target),
+          })),
+        }),
+        prisma.wmsComparison.update({
+          where: { id: c.id },
+          data: {
+            rowCursor: rows[rows.length - 1].rowId,
+            mismatchCount: { increment: mismatches.length },
+          },
+        }),
+      ]);
+      c = await prisma.wmsComparison.findUniqueOrThrow({ where: { id: c.id } });
     }
-
-    if (checked < skus.length) {
-      await finish({ checked, cursor, found: JSON.stringify(found) });
-      return;
-    }
-
-    const rows = await loadRows();
-    if (!rows) {
-      await finish({ status: "failed", error: "No catalog scan to compare against", finishedAt: new Date() });
-      return;
-    }
-    const mismatches = compareRows(
-      rows.filter((r) => r.status !== "ARCHIVED"),
-      new Map(Object.entries(found)),
-      provider.name,
-    );
-    await finish({
-      status: "done",
-      checked,
-      skus: null,
-      found: null,
-      cursor: null,
-      results: JSON.stringify(mismatches),
-      finishedAt: new Date(),
-    });
+    await save({ lockedUntil: null });
   } catch (error) {
-    await finish({
+    await save({
       status: "failed",
       error: error instanceof Error ? error.message : String(error),
       finishedAt: new Date(),
+      lockedUntil: null,
     });
   }
+}
+
+/** Removes a comparison's lookup data once it's no longer needed. */
+export async function clearLookups(comparisonId: string) {
+  await prisma.wmsFound.deleteMany({ where: { comparisonId } });
+}
+
+/** Counts of differences by issue, and how many of each can be fixed. */
+export async function mismatchCounts(comparisonId: string) {
+  const groups = await prisma.wmsMismatch.groupBy({
+    by: ["code"],
+    where: { comparisonId },
+    _count: true,
+  });
+  const fixable = await prisma.wmsMismatch.groupBy({
+    by: ["code"],
+    where: { comparisonId, target: { not: null } },
+    _count: true,
+  });
+  const count = (list: typeof groups, code: string) =>
+    list.find((g) => g.code === code)?._count ?? 0;
+  return Object.fromEntries(
+    (Object.keys(MISMATCH_INFO) as MismatchCode[]).map((code) => [
+      code,
+      { total: count(groups, code), fixable: count(fixable, code) },
+    ]),
+  ) as Record<MismatchCode, { total: number; fixable: number }>;
+}
+
+/** A page of a comparison's differences, optionally of one issue. */
+export async function mismatchPage(
+  comparisonId: string,
+  opts: { code?: MismatchCode | null; take: number; fixableOnly?: boolean; codes?: MismatchCode[] },
+) {
+  const rows = await prisma.wmsMismatch.findMany({
+    where: {
+      comparisonId,
+      ...(opts.code ? { code: opts.code } : opts.codes ? { code: { in: opts.codes } } : {}),
+      ...(opts.fixableOnly ? { target: { not: null } } : {}),
+    },
+    orderBy: { id: "asc" },
+    take: opts.take,
+  });
+  return rows.map((m) => ({
+    code: m.code as MismatchCode,
+    variantId: m.variantId,
+    productId: m.productId,
+    label: m.label,
+    sku: m.sku,
+    shopify: m.shopify,
+    wms: m.wms,
+    target: m.target === null ? undefined : (JSON.parse(m.target) as number | string),
+  })) satisfies Mismatch[];
 }

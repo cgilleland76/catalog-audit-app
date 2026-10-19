@@ -31,6 +31,11 @@ export type WmsProviderInfo = {
 };
 
 export interface WmsProvider extends WmsProviderInfo {
+  /**
+   * True when lookup pages through the warehouse's whole catalog (it gets every
+   * SKU at once and returns a cursor); false when it looks SKUs up in batches.
+   */
+  pagesCatalog: boolean;
   /** Throws with a readable message if the credentials don't work. */
   testConnection(credentials: WmsCredentials): Promise<void>;
   /**

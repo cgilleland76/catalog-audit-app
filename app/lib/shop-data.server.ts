@@ -7,7 +7,10 @@ import db from "../db.server";
  */
 export async function deleteShopData(shop: string) {
   await db.$transaction([
+    db.catalogVariant.deleteMany({ where: { shop } }),
     db.catalogScan.deleteMany({ where: { shop } }),
+    db.wmsMismatch.deleteMany({ where: { shop } }),
+    db.$executeRaw`DELETE FROM "WmsFound" WHERE "comparisonId" IN (SELECT "id" FROM "WmsComparison" WHERE "shop" = ${shop})`,
     db.wmsComparison.deleteMany({ where: { shop } }),
     db.fixItem.deleteMany({ where: { shop } }),
     db.fixBatch.deleteMany({ where: { shop } }),

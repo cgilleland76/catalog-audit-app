@@ -3,10 +3,12 @@ import type { AdminApiContext } from "@shopify/shopify-app-react-router/server";
 import prisma from "../db.server";
 import type { CatalogRow, ScanState } from "./catalog";
 
-// The catalog is read with a bulk operation: Shopify exports every variant to
-// a JSONL file in the background, so catalog size never makes a page wait.
+// The catalog is read with a bulk operation: Shopify exports every active and
+// draft variant to a JSONL file in the background (archived products are
+// ignored), then the file is imported a few megabytes per step into
+// CatalogVariant, so catalog size never makes a request run long.
 const BULK_QUERY = `{
-  productVariants {
+  productVariants(query: "product_status:active OR product_status:draft") {
     edges {
       node {
         id
@@ -72,6 +74,7 @@ const BULK_STATUS = `#graphql
         status
         errorCode
         objectCount
+        fileSize
         url
       }
     }
@@ -142,13 +145,18 @@ export function parseJsonl(text: string): CatalogRow[] {
   return rows;
 }
 
-type ScanRecord = Awaited<ReturnType<typeof prisma.catalogScan.findFirst>>;
+type ScanRecord = NonNullable<Awaited<ReturnType<typeof prisma.catalogScan.findFirst>>>;
+type VariantRecord = Awaited<ReturnType<typeof prisma.catalogVariant.findMany>>[number];
 
-const toState = (s: NonNullable<ScanRecord>): ScanState => ({
+const toState = (s: ScanRecord): ScanState => ({
   id: s.id,
   status: s.status as ScanState["status"],
   objectCount: s.objectCount,
   rowCount: s.rowCount,
+  progress:
+    s.status === "importing" && Number(s.fileSize) > 0
+      ? Math.min(1, Number(s.importOffset) / Number(s.fileSize))
+      : null,
   error: s.error,
   startedAt: s.startedAt.toISOString(),
   finishedAt: s.finishedAt?.toISOString() ?? null,
@@ -157,15 +165,66 @@ const toState = (s: NonNullable<ScanRecord>): ScanState => ({
 const fail = (id: string, error: string) =>
   prisma.catalogScan.update({
     where: { id },
-    data: { status: "failed", error, finishedAt: new Date() },
+    data: { status: "failed", error, url: null, lockedUntil: null, finishedAt: new Date() },
   });
 
+export const skuKey = (sku: string | null | undefined) => sku?.trim().toLowerCase() || null;
+
+/** A catalog row as stored in CatalogVariant. */
+export const toVariantData = (shop: string, scanId: string, r: CatalogRow) => ({
+  shop,
+  scanId,
+  variantId: r.variantId,
+  variantTitle: r.variantTitle,
+  productId: r.productId,
+  productTitle: r.productTitle,
+  handle: r.handle,
+  status: r.status,
+  vendor: r.vendor,
+  productType: r.productType,
+  tags: JSON.stringify(r.tags),
+  imageUrl: r.imageUrl,
+  sku: r.sku,
+  skuKey: skuKey(r.sku),
+  barcode: r.barcode,
+  price: r.price,
+  compareAtPrice: r.compareAtPrice,
+  cost: r.cost,
+  weight: r.weight,
+  weightUnit: r.weightUnit,
+  requiresShipping: r.requiresShipping,
+  inventoryQuantity: r.inventoryQuantity,
+});
+
+export const fromVariant = (v: VariantRecord): CatalogRow & { rowId: bigint } => ({
+  rowId: v.id,
+  variantId: v.variantId,
+  variantTitle: v.variantTitle,
+  productId: v.productId,
+  productTitle: v.productTitle,
+  handle: v.handle,
+  status: v.status,
+  vendor: v.vendor,
+  productType: v.productType,
+  tags: JSON.parse(v.tags) as string[],
+  imageUrl: v.imageUrl,
+  sku: v.sku,
+  barcode: v.barcode,
+  price: v.price,
+  compareAtPrice: v.compareAtPrice,
+  cost: v.cost,
+  weight: v.weight,
+  weightUnit: v.weightUnit,
+  requiresShipping: v.requiresShipping,
+  inventoryQuantity: v.inventoryQuantity,
+});
+
 // Scans whose status is being checked right now in this instance, so two
-// callers don't download the same file twice. Scans advance only when a page
-// checks on them (serverless functions can't keep working in the background).
+// callers don't ask Shopify twice. Scans advance only when something checks on
+// them (a page polling, or the scheduled sync).
 const checking = new Set<string>();
 
-/** Checks a running scan's bulk operation and saves the rows once it's done. */
+/** Checks a running scan's bulk operation; starts the import once it's done. */
 async function refresh(scanId: string, admin: AdminApiContext) {
   if (checking.has(scanId)) return;
   checking.add(scanId);
@@ -182,43 +241,36 @@ async function refresh(scanId: string, admin: AdminApiContext) {
           status: string;
           errorCode: string | null;
           objectCount: string;
+          fileSize: string | null;
           url: string | null;
         } | null;
       };
     };
     const op = json.data?.node;
-    if (!op) return fail(scan.id, "Shopify lost track of the export; scan again");
+    if (!op) return void (await fail(scan.id, "Shopify lost track of the export; scan again"));
 
     const objectCount = Number(op.objectCount) || 0;
     if (op.status === "CREATED" || op.status === "RUNNING") {
-      await prisma.catalogScan.update({
-        where: { id: scan.id },
-        data: { objectCount },
-      });
+      await prisma.catalogScan.update({ where: { id: scan.id }, data: { objectCount } });
       return;
     }
     if (op.status !== "COMPLETED") {
-      return fail(
+      await fail(
         scan.id,
         `Shopify export ${op.status.toLowerCase()}${op.errorCode ? ` (${op.errorCode})` : ""}`,
       );
+      return;
     }
-
-    // No URL means the shop has no variants.
-    const rows = op.url ? parseJsonl(await (await fetch(op.url)).text()) : [];
+    // No URL means the shop has no active or draft variants.
     await prisma.catalogScan.update({
       where: { id: scan.id },
       data: {
-        status: "done",
+        status: "importing",
         objectCount,
-        rowCount: rows.length,
-        rows: JSON.stringify(rows),
-        finishedAt: new Date(),
+        url: op.url,
+        fileSize: BigInt(op.url ? Number(op.fileSize) || 0 : 0),
+        importOffset: 0,
       },
-    });
-    // Keep only the latest finished scan's rows.
-    await prisma.catalogScan.deleteMany({
-      where: { shop: scan.shop, id: { not: scan.id }, status: { not: "running" } },
     });
   } catch (error) {
     await fail(scanId, error instanceof Error ? error.message : String(error));
@@ -227,11 +279,97 @@ async function refresh(scanId: string, admin: AdminApiContext) {
   }
 }
 
-export async function startScan(shop: string, admin: AdminApiContext) {
-  const running = await prisma.catalogScan.findFirst({
-    where: { shop, status: "running" },
+// Each import step reads up to CHUNK_BYTES of the export at a time with an
+// HTTP Range request, inserts the complete lines, and saves how far it got.
+const CHUNK_BYTES = 4 * 1024 * 1024;
+const INSERT_BATCH = 1000;
+const STEP_MS = 6000;
+const LOCK_MS = 20000;
+
+/** Imports the next part of a scan's export file; finishes the scan at the end. */
+export async function importStep(scanId: string) {
+  const now = new Date();
+  const claimed = await prisma.catalogScan.updateMany({
+    where: {
+      id: scanId,
+      status: "importing",
+      OR: [{ lockedUntil: null }, { lockedUntil: { lt: now } }],
+    },
+    data: { lockedUntil: new Date(now.getTime() + LOCK_MS) },
   });
-  if (running) return toState(running);
+  if (claimed.count === 0) return;
+
+  const scan = await prisma.catalogScan.findUniqueOrThrow({ where: { id: scanId } });
+  const deadline = Date.now() + STEP_MS;
+  const size = Number(scan.fileSize);
+  let offset = Number(scan.importOffset);
+  const decoder = new TextDecoder();
+
+  try {
+    while (scan.url && offset < size && Date.now() + 2500 < deadline) {
+      const end = Math.min(offset + CHUNK_BYTES, size) - 1;
+      const res = await fetch(scan.url, { headers: { range: `bytes=${offset}-${end}` } });
+      if (!res.ok) {
+        throw new Error(
+          res.status === 403 || res.status === 410
+            ? "The catalog export link expired; read the catalog again"
+            : `Downloading the catalog export failed (${res.status})`,
+        );
+      }
+      let bytes = new Uint8Array(await res.arrayBuffer());
+      // A server that ignores Range sends the whole file.
+      if (res.status === 200) bytes = bytes.subarray(offset, end + 1);
+      const atEnd = end + 1 >= size;
+      const take = atEnd ? bytes.length : bytes.lastIndexOf(10) + 1;
+      if (take <= 0) throw new Error("A catalog line was too long to import");
+
+      const rows = parseJsonl(decoder.decode(bytes.subarray(0, take)));
+      const data = rows.map((r) => toVariantData(scan.shop, scan.id, r));
+      const writes = [];
+      for (let i = 0; i < data.length; i += INSERT_BATCH) {
+        writes.push(prisma.catalogVariant.createMany({ data: data.slice(i, i + INSERT_BATCH) }));
+      }
+      offset += take;
+      // Rows and progress are saved together, so a retried step never
+      // imports the same lines twice.
+      await prisma.$transaction([
+        ...writes,
+        prisma.catalogScan.update({
+          where: { id: scan.id },
+          data: { importOffset: BigInt(offset), rowCount: { increment: rows.length } },
+        }),
+      ]);
+    }
+
+    if (!scan.url || offset >= size) {
+      await prisma.catalogScan.update({
+        where: { id: scan.id },
+        data: { status: "done", url: null, lockedUntil: null, finishedAt: new Date() },
+      });
+      // Keep only the latest finished scan.
+      const old = await prisma.catalogScan.findMany({
+        where: { shop: scan.shop, id: { not: scan.id }, status: { in: ["done", "failed"] } },
+        select: { id: true },
+      });
+      const ids = old.map((o) => o.id);
+      if (ids.length) {
+        await prisma.catalogVariant.deleteMany({ where: { scanId: { in: ids } } });
+        await prisma.catalogScan.deleteMany({ where: { id: { in: ids } } });
+      }
+      return;
+    }
+    await prisma.catalogScan.update({ where: { id: scan.id }, data: { lockedUntil: null } });
+  } catch (error) {
+    await prisma.catalogVariant.deleteMany({ where: { scanId: scan.id } });
+    await fail(scan.id, error instanceof Error ? error.message : String(error));
+  }
+}
+
+export async function startScan(shop: string, admin: AdminApiContext) {
+  const active = await prisma.catalogScan.findFirst({
+    where: { shop, status: { in: ["running", "importing"] } },
+  });
+  if (active) return toState(active);
 
   const response = await admin.graphql(RUN_BULK, {
     variables: { query: BULK_QUERY },
@@ -260,7 +398,7 @@ export async function startScan(shop: string, admin: AdminApiContext) {
   return toState(scan);
 }
 
-/** Latest scan of any status, after checking on it if it's still running. */
+/** Latest scan of any status, after moving it forward if it's in progress. */
 export async function getScanState(
   shop: string,
   admin: AdminApiContext,
@@ -269,36 +407,79 @@ export async function getScanState(
     where: { shop },
     orderBy: { startedAt: "desc" },
   });
-  if (scan?.status === "running") {
-    await refresh(scan.id, admin);
+  if (scan?.status === "running") await refresh(scan.id, admin);
+  if (scan) scan = await prisma.catalogScan.findUnique({ where: { id: scan.id } });
+  if (scan?.status === "importing") {
+    await importStep(scan.id);
     scan = await prisma.catalogScan.findUnique({ where: { id: scan.id } });
   }
   return scan ? toState(scan) : null;
 }
 
-/** Rows from the latest finished scan, or null if there isn't one yet. */
-export async function loadCatalog(shop: string) {
+/** The latest finished scan, or null if there isn't one yet. */
+export async function latestCatalog(shop: string) {
   const scan = await prisma.catalogScan.findFirst({
     where: { shop, status: "done" },
     orderBy: { startedAt: "desc" },
   });
-  if (!scan?.rows) return null;
-  return {
-    rows: JSON.parse(scan.rows) as CatalogRow[],
-    scannedAt: (scan.finishedAt ?? scan.startedAt).toISOString(),
-  };
+  return scan
+    ? {
+        scanId: scan.id,
+        count: scan.rowCount,
+        scannedAt: (scan.finishedAt ?? scan.startedAt).toISOString(),
+      }
+    : null;
 }
 
+/** Product statuses a comparison or page covers. */
+export type Scope = "active" | "active_draft";
+export const scopeStatuses = (scope: string) =>
+  scope === "active_draft" ? ["ACTIVE", "DRAFT"] : ["ACTIVE"];
+
+/** Variants of a scan in id order, `size` at a time, starting after `after`. */
+export async function variantPage(
+  scanId: string,
+  opts: { after?: bigint; size?: number; statuses?: string[]; skuKeys?: string[] } = {},
+) {
+  const rows = await prisma.catalogVariant.findMany({
+    where: {
+      scanId,
+      id: { gt: opts.after ?? 0n },
+      ...(opts.statuses ? { status: { in: opts.statuses } } : {}),
+      ...(opts.skuKeys ? { skuKey: { in: opts.skuKeys } } : {}),
+    },
+    orderBy: { id: "asc" },
+    take: opts.size ?? 2000,
+  });
+  return rows.map(fromVariant);
+}
+
+/** Every row of a scan, for pages that still work on the whole catalog. */
+export async function allRows(scanId: string) {
+  const out: CatalogRow[] = [];
+  let after = 0n;
+  for (;;) {
+    const page = await variantPage(scanId, { after, size: 5000 });
+    if (!page.length) return out;
+    for (const { rowId, ...row } of page) out.push(row);
+    after = page[page.length - 1].rowId;
+  }
+}
+
+/** Catalogs larger than this aren't sent whole to the audit and line sheet pages. */
+export const WHOLE_CATALOG_LIMIT = 10_000;
+
 /**
- * What every page's loader needs: the latest rows (if any) and the scan
- * status. Starts the first scan automatically.
+ * What every page's loader needs: the latest catalog (id, size, date) and the
+ * scan status. Starts the first scan automatically.
  */
 export async function catalogForPage(shop: string, admin: AdminApiContext) {
   let scan = await getScanState(shop, admin);
   if (!scan) scan = await startScan(shop, admin);
-  const catalog = await loadCatalog(shop);
+  const catalog = await latestCatalog(shop);
   return {
-    rows: catalog?.rows ?? null,
+    scanId: catalog?.scanId ?? null,
+    count: catalog?.count ?? null,
     scannedAt: catalog?.scannedAt ?? null,
     scan,
   };

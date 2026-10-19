@@ -219,6 +219,121 @@ CREATE INDEX "SyncRun_shop_startedAt_idx" ON "SyncRun"("shop", "startedAt");
 ALTER TABLE "SyncRun" ENABLE ROW LEVEL SECURITY;
 `,
   },
+  {
+    name: "20261020120000_catalog_rows",
+    sql: `
+-- Old-format catalog scans and comparisons can't be converted; pages start a
+-- new scan automatically. Fix history, connections and sync settings are kept.
+DELETE FROM "CatalogScan";
+DELETE FROM "WmsComparison";
+UPDATE "SyncSetting" SET "stage" = 'idle', "scanId" = NULL, "comparisonId" = NULL, "fixBatchId" = NULL, "runId" = NULL;
+UPDATE "SyncRun" SET "status" = 'failed', "message" = 'Interrupted by an update', "finishedAt" = CURRENT_TIMESTAMP WHERE "status" = 'running';
+-- AlterTable
+ALTER TABLE "WmsComparison" DROP COLUMN "found",
+DROP COLUMN "results",
+DROP COLUMN "skus",
+ADD COLUMN     "mismatchCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "rowCursor" BIGINT NOT NULL DEFAULT 0,
+ADD COLUMN     "scanId" TEXT NOT NULL,
+ADD COLUMN     "scope" TEXT NOT NULL DEFAULT 'active',
+ADD COLUMN     "skuCursor" TEXT,
+ADD COLUMN     "stage" TEXT NOT NULL DEFAULT 'lookup';
+
+-- AlterTable
+ALTER TABLE "CatalogScan" DROP COLUMN "rows",
+ADD COLUMN     "fileSize" BIGINT NOT NULL DEFAULT 0,
+ADD COLUMN     "importOffset" BIGINT NOT NULL DEFAULT 0,
+ADD COLUMN     "lockedUntil" TIMESTAMP(3),
+ADD COLUMN     "url" TEXT;
+
+-- AlterTable
+ALTER TABLE "SyncSetting" ADD COLUMN     "scope" TEXT NOT NULL DEFAULT 'active';
+
+-- CreateTable
+CREATE TABLE "WmsFound" (
+    "id" BIGSERIAL NOT NULL,
+    "comparisonId" TEXT NOT NULL,
+    "skuKey" TEXT NOT NULL,
+    "data" TEXT NOT NULL,
+
+    CONSTRAINT "WmsFound_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "WmsMismatch" (
+    "id" BIGSERIAL NOT NULL,
+    "comparisonId" TEXT NOT NULL,
+    "shop" TEXT NOT NULL,
+    "code" TEXT NOT NULL,
+    "variantId" TEXT NOT NULL,
+    "productId" TEXT NOT NULL,
+    "label" TEXT NOT NULL,
+    "sku" TEXT NOT NULL,
+    "shopify" TEXT NOT NULL,
+    "wms" TEXT NOT NULL,
+    "target" TEXT,
+
+    CONSTRAINT "WmsMismatch_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "CatalogVariant" (
+    "id" BIGSERIAL NOT NULL,
+    "shop" TEXT NOT NULL,
+    "scanId" TEXT NOT NULL,
+    "variantId" TEXT NOT NULL,
+    "variantTitle" TEXT NOT NULL,
+    "productId" TEXT NOT NULL,
+    "productTitle" TEXT NOT NULL,
+    "handle" TEXT NOT NULL,
+    "status" TEXT NOT NULL,
+    "vendor" TEXT NOT NULL,
+    "productType" TEXT NOT NULL,
+    "tags" TEXT NOT NULL,
+    "imageUrl" TEXT,
+    "sku" TEXT,
+    "skuKey" TEXT,
+    "barcode" TEXT,
+    "price" DOUBLE PRECISION NOT NULL,
+    "compareAtPrice" DOUBLE PRECISION,
+    "cost" DOUBLE PRECISION,
+    "weight" DOUBLE PRECISION,
+    "weightUnit" TEXT,
+    "requiresShipping" BOOLEAN NOT NULL,
+    "inventoryQuantity" INTEGER,
+
+    CONSTRAINT "CatalogVariant_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "WmsFound_comparisonId_skuKey_key" ON "WmsFound"("comparisonId", "skuKey");
+
+-- CreateIndex
+CREATE INDEX "WmsMismatch_comparisonId_code_id_idx" ON "WmsMismatch"("comparisonId", "code", "id");
+
+-- CreateIndex
+CREATE INDEX "WmsMismatch_comparisonId_variantId_idx" ON "WmsMismatch"("comparisonId", "variantId");
+
+-- CreateIndex
+CREATE INDEX "WmsMismatch_shop_idx" ON "WmsMismatch"("shop");
+
+-- CreateIndex
+CREATE INDEX "CatalogVariant_scanId_id_idx" ON "CatalogVariant"("scanId", "id");
+
+-- CreateIndex
+CREATE INDEX "CatalogVariant_scanId_skuKey_idx" ON "CatalogVariant"("scanId", "skuKey");
+
+-- CreateIndex
+CREATE INDEX "CatalogVariant_scanId_variantId_idx" ON "CatalogVariant"("scanId", "variantId");
+
+-- CreateIndex
+CREATE INDEX "CatalogVariant_shop_idx" ON "CatalogVariant"("shop");
+
+ALTER TABLE "WmsFound" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "WmsMismatch" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "CatalogVariant" ENABLE ROW LEVEL SECURITY;
+`,
+  },
 ];
 
 const statements = (sql: string) =>

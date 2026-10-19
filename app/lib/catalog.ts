@@ -24,9 +24,11 @@ export type CatalogRow = {
 
 export type ScanState = {
   id: string;
-  status: "running" | "done" | "failed";
+  status: "running" | "importing" | "done" | "failed";
   objectCount: number;
   rowCount: number;
+  /** Share of the export file imported so far, while importing. */
+  progress: number | null;
   error: string | null;
   startedAt: string;
   finishedAt: string | null;

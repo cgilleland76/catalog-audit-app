@@ -51,43 +51,113 @@ model WmsConnection {
   @@unique([shop, provider])
 }
 
-// One Shopify-vs-WMS comparison. Serverless requests can only run for a few
-// seconds, so it advances in steps: each step looks up the next SKUs and saves
-// progress here. Pages call a step while they poll.
+// One Shopify-vs-WMS comparison of a catalog scan. Serverless requests can
+// only run for a few seconds, so it advances in steps: first looking SKUs up in
+// the warehouse (stage "lookup", results in WmsFound), then comparing variants
+// in batches (stage "compare", differences in WmsMismatch).
 model WmsComparison {
-  id          String    @id @default(cuid())
-  shop        String
-  provider    String
-  status      String // running | done | failed
-  skus        String? // JSON array of SKUs to look up
-  found       String? // JSON object: lower-cased SKU -> WmsProduct
-  checked     Int       @default(0)
-  total       Int       @default(0)
-  error       String?
-  results     String? // JSON array of mismatches
-  cursor      String? // where a catalog-paging lookup resumes
-  lockedUntil DateTime? // a step is running until this time
-  startedAt   DateTime  @default(now())
-  finishedAt  DateTime?
+  id            String    @id @default(cuid())
+  shop          String
+  provider      String
+  scanId        String
+  scope         String    @default("active") // active | active_draft
+  status        String // running | done | failed
+  stage         String    @default("lookup") // lookup | compare
+  checked       Int       @default(0) // SKUs looked up
+  total         Int       @default(0) // distinct SKUs to look up
+  skuCursor     String? // last SKU key looked up (per-SKU systems)
+  cursor        String? // where a catalog-paging lookup resumes
+  rowCursor     BigInt    @default(0) // last CatalogVariant id compared
+  mismatchCount Int       @default(0)
+  error         String?
+  lockedUntil   DateTime? // a step is running until this time
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
 
   @@index([shop, provider, startedAt])
 }
 
-// A snapshot of the shop's catalog, read with a Shopify bulk operation.
-// Every page works from the latest finished scan.
+// A product found in the warehouse during a comparison's lookup stage.
+model WmsFound {
+  id           BigInt @id @default(autoincrement())
+  comparisonId String
+  skuKey       String // lower-cased, trimmed SKU
+  data         String // JSON WmsProduct
+
+  @@unique([comparisonId, skuKey])
+}
+
+// One difference a comparison found. `target` is the warehouse's value as
+// JSON (pounds, cost or barcode), used by Fix in Shopify.
+model WmsMismatch {
+  id           BigInt  @id @default(autoincrement())
+  comparisonId String
+  shop         String
+  code         String
+  variantId    String
+  productId    String
+  label        String
+  sku          String
+  shopify      String
+  wms          String
+  target       String?
+
+  @@index([comparisonId, code, id])
+  @@index([comparisonId, variantId])
+  @@index([shop])
+}
+
+// A snapshot of the shop's active and draft variants, read with a Shopify bulk
+// operation (running), then imported from its JSONL file a few megabytes per
+// step (importing) into CatalogVariant. Pages work from the latest done scan.
 model CatalogScan {
   id              String    @id @default(cuid())
   shop            String
-  status          String // running | done | failed
+  status          String // running | importing | done | failed
   bulkOperationId String?
+  url             String? // the export file, while importing
+  fileSize        BigInt    @default(0)
+  importOffset    BigInt    @default(0) // bytes imported so far
   objectCount     Int       @default(0)
   rowCount        Int       @default(0)
-  rows            String? // JSON array of CatalogRow
   error           String?
+  lockedUntil     DateTime? // an import step is running until this time
   startedAt       DateTime  @default(now())
   finishedAt      DateTime?
 
   @@index([shop, startedAt])
+}
+
+// One variant of a catalog scan (see CatalogRow in app/lib/catalog.ts).
+model CatalogVariant {
+  id                BigInt  @id @default(autoincrement())
+  shop              String
+  scanId            String
+  variantId         String
+  variantTitle      String
+  productId         String
+  productTitle      String
+  handle            String
+  status            String
+  vendor            String
+  productType       String
+  tags              String // JSON array
+  imageUrl          String?
+  sku               String?
+  skuKey            String? // lower-cased, trimmed SKU
+  barcode           String?
+  price             Float
+  compareAtPrice    Float?
+  cost              Float?
+  weight            Float?
+  weightUnit        String?
+  requiresShipping  Boolean
+  inventoryQuantity Int?
+
+  @@index([scanId, id])
+  @@index([scanId, skuKey])
+  @@index([scanId, variantId])
+  @@index([shop])
 }
 
 // Changes SKU Doctor wrote to Shopify from a warehouse comparison, kept so
@@ -143,6 +213,7 @@ model SyncSetting {
   enabled      Boolean   @default(false)
   frequency    String    @default("daily") // 6h | daily | weekly
   fixFields    String    @default("[]") // JSON array of weight | cost | barcode
+  scope        String    @default("active") // active | active_draft
   stage        String    @default("idle") // idle | scanning | comparing | fixing
   scanId       String?
   comparisonId String?
