@@ -39,6 +39,7 @@ import { fixStatus, fixSummary, hideModal } from "../components/fixes";
 import { downloadFile, numericId, toCsv } from "../lib/catalog";
 import {
   PROVIDERS,
+  isListed,
   deleteCredentials,
   getProvider,
   loadCredentials,
@@ -127,14 +128,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     return {
       locked: false as const,
       view: "list" as const,
-      systems: Object.values(PROVIDERS).map((p) => {
-        const comparison = latest.find((c) => c.provider === p.id);
-        return {
-          ...providerInfo(p),
-          connected: connections.some((c) => c.provider === p.id),
-          comparison: comparison ? summarize(comparison) : null,
-        };
-      }),
+      systems: Object.values(PROVIDERS)
+        .map((p) => {
+          const comparison = latest.find((c) => c.provider === p.id);
+          return {
+            ...providerInfo(p),
+            connected: connections.some((c) => c.provider === p.id),
+            comparison: comparison ? summarize(comparison) : null,
+          };
+        })
+        .filter((s) => isListed(s.id, s.connected)),
     };
   }
 

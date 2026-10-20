@@ -21,7 +21,7 @@ export const PLANS: Record<
     price: "$39/month",
     features: [
       "Everything in Pro, for up to 100,000 variants",
-      "Warehouse comparison (ShipHero, ShipBob, Cin7 Core, Veeqo)",
+      "Warehouse comparison (ShipHero and Veeqo, more coming)",
       "Fix in Shopify with Undo",
       "Scheduled sync",
       "History of every change",
