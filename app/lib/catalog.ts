@@ -196,4 +196,8 @@ export const variantLabel = (r: CatalogRow) =>
     ? `${r.productTitle} — ${r.variantTitle}`
     : r.productTitle;
 
+/** "1 SKU", "2 SKUs". */
+export const count = (n: number, noun: string) =>
+  `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
+
 export const numericId = (gid: string) => gid.split("/").pop() ?? gid;

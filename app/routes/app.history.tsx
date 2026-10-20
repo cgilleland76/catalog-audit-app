@@ -20,7 +20,7 @@ import {
   formatFixValue,
   hideModal,
 } from "../components/fixes";
-import { downloadFile, numericId, toCsv } from "../lib/catalog";
+import { count, downloadFile, numericId, toCsv } from "../lib/catalog";
 import { FIELD_LABEL, UNDO_DAYS, type FixField } from "../lib/fixes";
 import {
   activeFix,
@@ -467,7 +467,7 @@ function RunsList({
                     <s-badge tone={RUN_TONE[r.status] ?? "neutral"}>{RUN_LABEL[r.status] ?? r.status}</s-badge>
                     <s-text>
                       {r.differences !== null
-                        ? `${r.total.toLocaleString()} SKUs, ${r.differences.toLocaleString()} differences`
+                        ? `${count(r.total, "SKU")}, ${count(r.differences, "difference")}`
                         : r.status === "running"
                           ? `${r.checked.toLocaleString()} of ${r.total.toLocaleString()} checked`
                           : (r.message ?? "")}

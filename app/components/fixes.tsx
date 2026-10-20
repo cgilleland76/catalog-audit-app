@@ -34,7 +34,7 @@ export function fixSummary(b: FixBatchRow) {
   if (b.status === "applying") return `${n(b.applied)} of ${n(b.total)} done`;
   if (b.status === "undoing") return `${n(b.reverted)} restored so far`;
   if (b.status === "failed") return b.error ?? "Stopped";
-  const parts = [`${n(b.applied)} of ${n(b.total)} values set`];
+  const parts = [`${n(b.applied)} of ${n(b.total)} ${b.total === 1 ? "value" : "values"} set`];
   if (b.failed) parts.push(`${n(b.failed)} failed`);
   if (b.reverted) parts.push(`${n(b.reverted)} undone`);
   if (b.kept) parts.push(`${n(b.kept)} kept (changed in Shopify since)`);

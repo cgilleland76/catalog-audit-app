@@ -36,7 +36,7 @@ import { parseFields, saveSyncSetting } from "../lib/sync.server";
 import { UpgradeSection } from "../components/Upgrade";
 import { ScanBanner, useCatalogScan } from "../components/CatalogScan";
 import { fixStatus, fixSummary, hideModal } from "../components/fixes";
-import { downloadFile, numericId, toCsv } from "../lib/catalog";
+import { count, downloadFile, numericId, toCsv } from "../lib/catalog";
 import {
   PROVIDERS,
   isListed,
@@ -89,9 +89,6 @@ const FIX_PREVIEW_ROWS = 25;
 const EXPORT_LIMIT = 25_000;
 
 /** The issue filter and how many rows to show, from the address. */
-/** "1 SKU", "2 SKUs". */
-const count = (n: number, noun: string) => `${n.toLocaleString()} ${noun}${n === 1 ? "" : "s"}`;
-
 function resultParams(request: Request) {
   const url = new URL(request.url);
   const issue = url.searchParams.get("issue");
