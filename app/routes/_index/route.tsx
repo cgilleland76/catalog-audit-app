@@ -1,7 +1,5 @@
 import type { LoaderFunctionArgs } from "react-router";
-import { redirect, Form, Link, useLoaderData } from "react-router";
-
-import { login } from "../../shopify.server";
+import { redirect, Link } from "react-router";
 
 import styles from "./styles.module.css";
 
@@ -14,12 +12,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw redirect(`/app?${params.toString()}`);
   }
 
-  return { showForm: Boolean(login) };
+  return null;
 };
 
 export default function App() {
-  const { showForm } = useLoaderData<typeof loader>();
-
   return (
     <div className={styles.index}>
       <div className={styles.content}>
@@ -29,22 +25,12 @@ export default function App() {
           Find and fix catalog problems before they cost you money, and build
           wholesale line sheets in minutes.
         </p>
-        {showForm && (
-          <Form className={styles.form} method="post" action="/auth/login">
-            <label className={styles.label}>
-              <span>Your store&apos;s Shopify domain</span>
-              <input
-                className={styles.input}
-                type="text"
-                name="shop"
-                placeholder="your-store.myshopify.com"
-              />
-            </label>
-            <button className={styles.button} type="submit">
-              Open SKU Doctor
-            </button>
-          </Form>
-        )}
+        {/* Merchants install and open the app from Shopify, never by typing
+            their store's address here (App Store requirement). */}
+        <p className={styles.text}>
+          Install SKU Doctor from the Shopify App Store, then open it from Apps
+          in your Shopify admin.
+        </p>
         <ul className={styles.list}>
           <li>
             <strong>Catalog audit</strong>
