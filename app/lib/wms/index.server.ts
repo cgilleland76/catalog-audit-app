@@ -352,15 +352,22 @@ export async function mismatchPage(
   comparisonId: string,
   opts: { code?: MismatchCode | null; take: number; fixableOnly?: boolean; codes?: MismatchCode[] },
 ) {
-  const rows = await prisma.wmsMismatch.findMany({
-    where: {
-      comparisonId,
-      ...(opts.code ? { code: opts.code } : opts.codes ? { code: { in: opts.codes } } : {}),
-      ...(opts.fixableOnly ? { target: { not: null } } : {}),
-    },
-    orderBy: { id: "asc" },
-    take: opts.take,
-  });
+  const page = (code: object, take: number) =>
+    prisma.wmsMismatch.findMany({
+      where: { comparisonId, ...code, ...(opts.fixableOnly ? { target: { not: null } } : {}) },
+      orderBy: { id: "asc" },
+      take,
+    });
+  let rows;
+  if (opts.code || opts.codes) {
+    rows = await page(opts.code ? { code: opts.code } : { code: { in: opts.codes } }, opts.take);
+  } else {
+    // Value differences (which can be fixed) before SKUs missing from the warehouse.
+    rows = await page({ code: { not: "not_in_wms" } }, opts.take);
+    if (rows.length < opts.take) {
+      rows = rows.concat(await page({ code: "not_in_wms" }, opts.take - rows.length));
+    }
+  }
   return rows.map((m) => ({
     code: m.code as MismatchCode,
     variantId: m.variantId,
