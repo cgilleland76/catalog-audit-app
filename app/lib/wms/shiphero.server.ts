@@ -7,6 +7,13 @@ const AUTH = "https://public-api.shiphero.com/auth/refresh";
 // the same lookup the Make weight/cost syncs use.
 const BATCH = 25;
 
+// Requests in flight at once. A request takes a few seconds while ShipHero's
+// credits refill quickly, so one at a time left most of the allowance unused.
+const PARALLEL = 8;
+
+// Credits one batch can cost (ShipHero measured about 2 per SKU, 3 for kits).
+const BATCH_CREDITS = BATCH * 3;
+
 type Node = {
   sku: string;
   name: string | null;
@@ -86,6 +93,29 @@ function creditWaitMs(errors: GqlError[]): number | null {
 
 let requestCount = 0;
 
+// The credit balance ShipHero last reported for each refresh token, used to
+// send only as many requests at once as the balance covers.
+type Quota = { remaining: number; rate: number; at: number };
+const quotas = new Map<string, Quota>();
+
+function recordQuota(refreshToken: string, extensions: unknown) {
+  const q = (extensions as { throttling?: { user_quota?: { credits_remaining?: number; increment_rate?: number } } })
+    ?.throttling?.user_quota;
+  if (typeof q?.credits_remaining === "number" && typeof q.increment_rate === "number") {
+    quotas.set(refreshToken, { remaining: q.credits_remaining, rate: q.increment_rate, at: Date.now() });
+  }
+}
+
+/** How many batches to send now, and how long to wait first if none fit. */
+export function nextWave(quota: Quota | undefined, now = Date.now()) {
+  if (!quota) return { size: 1, waitMs: 0 }; // learn the balance first
+  const credits = quota.remaining + (quota.rate * (now - quota.at)) / 1000;
+  const size = Math.min(PARALLEL, Math.floor(credits / BATCH_CREDITS));
+  if (size >= 1) return { size, waitMs: 0 };
+  const waitMs = Math.ceil(((BATCH_CREDITS - credits) / Math.max(quota.rate, 1)) * 1000);
+  return { size: 1, waitMs };
+}
+
 async function query<T>(
   credentials: WmsCredentials,
   body: string,
@@ -110,6 +140,7 @@ async function query<T>(
       continue;
     }
     const json = (await res.json()) as { data?: T; errors?: GqlError[]; extensions?: unknown };
+    recordQuota(credentials.refreshToken, json.extensions);
     // Every 50th response, log ShipHero's reported cost so batching can be tuned.
     if (++requestCount % 50 === 1 && json.extensions) {
       console.log(`[shiphero] cost sample: ${JSON.stringify(json.extensions).slice(0, 300)}`);
@@ -247,22 +278,41 @@ export const shiphero: WmsProvider = {
   async lookup(credentials, skus, deadline) {
     const found: WmsProduct[] = [];
     let processed = 0;
+
+    const lookupBatch = async (batch: string[]) => {
+      const data = await query<LookupResult>(
+        credentials,
+        lookupQuery(batch, credentials.customerAccountId),
+        deadline,
+      );
+      const hits: WmsProduct[] = [];
+      batch.forEach((sku, j) => {
+        const node = data[`s${j}`]?.data?.edges?.[0]?.node;
+        // products(sku:) can match loosely; only accept the exact SKU.
+        if (node && node.sku?.trim().toLowerCase() === sku.trim().toLowerCase()) {
+          hits.push(normalize(node));
+        }
+      });
+      return hits;
+    };
+
     try {
       while (processed < skus.length && Date.now() + REQUEST_MS < deadline) {
-        const batch = skus.slice(processed, processed + BATCH);
-        const data = await query<LookupResult>(
-          credentials,
-          lookupQuery(batch, credentials.customerAccountId),
-          deadline,
-        );
-        batch.forEach((sku, j) => {
-          const node = data[`s${j}`]?.data?.edges?.[0]?.node;
-          // products(sku:) can match loosely; only accept the exact SKU.
-          if (node && node.sku?.trim().toLowerCase() === sku.trim().toLowerCase()) {
-            found.push(normalize(node));
-          }
-        });
-        processed += batch.length;
+        const wave = nextWave(quotas.get(credentials.refreshToken));
+        if (wave.waitMs) await waitOrStop(wave.waitMs, deadline);
+        const batches: string[][] = [];
+        for (let i = 0; i < wave.size && processed + i * BATCH < skus.length; i++) {
+          const start = processed + i * BATCH;
+          batches.push(skus.slice(start, start + BATCH));
+        }
+        const results = await Promise.allSettled(batches.map(lookupBatch));
+        // Only SKUs from the front of the list count as done, so stop at the
+        // first batch that didn't finish; the next step retries from there.
+        for (const [i, result] of results.entries()) {
+          if (result.status === "rejected") throw result.reason;
+          found.push(...result.value);
+          processed += batches[i].length;
+        }
       }
     } catch (error) {
       if (!(error instanceof OutOfTime)) throw error;
