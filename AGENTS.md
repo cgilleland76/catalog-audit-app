@@ -6,4 +6,4 @@ Use the [Shopify AI Toolkit](https://shopify.dev/docs/apps/build/ai-toolkit) for
 
 ## Before changing anything
 
-Read [docs/lessons-learned.md](docs/lessons-learned.md). App changes are made only in the owner's designated SKU Doctor session; check GitHub (`git fetch`, `git ls-remote --heads origin`) and read the files before editing; branch from `dev`.
+Read [docs/shopify-app-playbook.md](docs/shopify-app-playbook.md) (shared by all our apps; keep the copies identical) and [docs/lessons-learned.md](docs/lessons-learned.md). App changes are made only in the owner's designated SKU Doctor session; check GitHub (`git fetch`, `git ls-remote --heads origin`) and read the files before editing; branch from `dev`.
