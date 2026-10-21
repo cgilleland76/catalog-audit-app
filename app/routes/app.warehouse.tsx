@@ -758,7 +758,12 @@ function WarehouseComparison({
 
       {comparison?.status === "failed" && (
         <s-banner tone="critical" heading="Comparison failed">
-          {comparison.error}
+          <s-stack direction="block" gap="small">
+            <s-text>{comparison.error}</s-text>
+            <s-button commandFor={modalId(provider.id)} command="--show">
+              Update connection
+            </s-button>
+          </s-stack>
         </s-banner>
       )}
 
@@ -909,6 +914,8 @@ function WarehouseComparison({
         </s-section>
       )}
 
+      <ConnectModal provider={provider} reconnect onConnected={() => {}} />
+
       {comparison?.status === "done" && (
         <FixModal
           preview={fixPreview}
@@ -934,6 +941,9 @@ function WarehouseComparison({
       <s-section slot="aside" heading="Connection">
         <s-stack direction="block" gap="base">
           <s-badge tone="success">Connected to {provider.name}</s-badge>
+          <s-button variant="tertiary" commandFor={modalId(provider.id)} command="--show">
+            Update connection
+          </s-button>
           <s-button
             variant="tertiary"
             tone="critical"

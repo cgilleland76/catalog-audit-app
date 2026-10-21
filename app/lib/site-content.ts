@@ -12,6 +12,14 @@ export const UPCOMING: { title: string; description: string }[] = [];
 
 export const UPDATES: Update[] = [
   {
+    date: "2026-10-21",
+    title: "Clearer warehouse login messages",
+    items: [
+      "When ShipHero, Veeqo or Cin7 Core stops accepting your saved key (for example after it's refreshed or regenerated), SKU Doctor now says why and where to get the current one.",
+      "Update connection: replace a warehouse key from the warehouse's page or the failed-comparison message, without disconnecting first.",
+    ],
+  },
+  {
     date: "2026-10-20",
     title: "Large catalogs, plan limits and the active/draft filter",
     items: [

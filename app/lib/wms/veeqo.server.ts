@@ -23,7 +23,7 @@ async function get(
       headers: { "x-api-key": credentials.apiKey ?? "", accept: "application/json" },
     });
     if (res.status === 401 || res.status === 403) {
-      throw new Error("Veeqo rejected the API key. Check it and try again.");
+      throw new Error("Veeqo didn't accept the API key. A key stops working when it's refreshed in Veeqo or API access is turned off. In Veeqo, go to Settings → Users → your user, copy the current API key and enter it again.");
     }
     if (res.status === 429 || res.status >= 500) {
       const retryAfter = Number(res.headers.get("retry-after"));

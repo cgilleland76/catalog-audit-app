@@ -23,7 +23,7 @@ async function get(credentials: WmsCredentials, path: string, deadline: number):
       },
     });
     if (res.status === 401 || res.status === 403) {
-      throw new Error("Cin7 Core rejected the Account ID or Application Key. Check both.");
+      throw new Error("Cin7 Core didn't accept the Account ID and Application Key. A key stops working when its API application is deleted or the key is regenerated. In Cin7 Core, open Integrations → API, copy the current Account ID and Application Key and enter them again.");
     }
     // Cin7 Core allows about 60 calls a minute and answers 429 or 503 past that.
     if (res.status === 429 || res.status >= 500) {

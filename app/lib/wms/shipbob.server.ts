@@ -31,7 +31,7 @@ async function get(
       },
     });
     if (res.status === 401 || res.status === 403) {
-      throw new Error("ShipBob rejected the access token. Check it and the environment.");
+      throw new Error("ShipBob didn't accept the access token. A token stops working when it's revoked or expires, and a sandbox token only works with Environment set to sandbox. Create a new Personal Access Token in ShipBob (Integrations → API Tokens) and enter it again.");
     }
     if (res.status === 429 || res.status >= 500) {
       const retryAfter = Number(res.headers.get("retry-after"));

@@ -61,7 +61,7 @@ async function accessToken(refreshToken: string): Promise<string> {
   };
   if (!res.ok || !json.access_token) {
     throw new Error(
-      `ShipHero rejected the refresh token (${res.status}${json.error ? `: ${json.error}` : ""})`,
+      `ShipHero didn't accept the refresh token (${res.status}${json.error ? `: ${json.error}` : ""}). A refresh token stops working when it's revoked or replaced. Create a new one in ShipHero and enter it again.`,
     );
   }
   tokenCache.set(refreshToken, {
