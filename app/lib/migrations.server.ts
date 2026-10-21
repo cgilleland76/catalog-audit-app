@@ -336,6 +336,23 @@ ALTER TABLE "WmsMismatch" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "CatalogVariant" ENABLE ROW LEVEL SECURITY;
 `,
   },
+  {
+    name: "20261021120000_shop_plan",
+    sql: `
+-- CreateTable
+CREATE TABLE "ShopPlan" (
+    "shop" TEXT NOT NULL,
+    "shopGid" TEXT,
+    "handles" TEXT,
+    "trialEndsAt" TIMESTAMP(3),
+    "checkedAt" TIMESTAMP(3),
+
+    CONSTRAINT "ShopPlan_pkey" PRIMARY KEY ("shop")
+);
+
+ALTER TABLE "ShopPlan" ENABLE ROW LEVEL SECURITY;
+`,
+  },
 ];
 
 const statements = (sql: string) =>

@@ -3,16 +3,18 @@ import { useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { authenticate } from "../shopify.server";
-import { getPlan, planOverride, planSelectionUrl } from "../lib/plans.server";
+import { billingEnabled, getPlan, planOverride, planSelectionUrl } from "../lib/plans.server";
 import { PLANS, type PlanId } from "../lib/plans";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
+  // Shopify sends the merchant back with ?plan_handle= after they choose a plan.
+  const fresh = new URL(request.url).searchParams.has("plan_handle");
   return {
-    plan: await getPlan(session.shop, admin),
+    plan: await getPlan(session.shop, admin, { fresh }),
     upgradeUrl: planSelectionUrl(session.shop),
-    // Set on the dev site, which has no Shopify plan picker to link to.
-    overridden: planOverride() !== null,
+    // The dev site has no Shopify plan picker to link to.
+    overridden: planOverride() !== null || !billingEnabled(),
   };
 };
 
@@ -30,7 +32,7 @@ export default function PlansPage() {
       )}
 
       {overridden && (
-        <s-banner tone="info" heading="Test app: plan set by PLAN_OVERRIDE">
+        <s-banner tone="info" heading="Test app: billing is off">
           This copy of SKU Doctor has the {PLANS[plan].name} plan unlocked for
           testing, so there&apos;s no plan to choose or pay for here.
         </s-banner>

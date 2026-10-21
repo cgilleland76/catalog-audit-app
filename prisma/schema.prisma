@@ -246,3 +246,13 @@ model SyncRun {
 
   @@index([shop, startedAt])
 }
+
+// The shop's Shopify App Pricing plan, as last read from the Partner API.
+model ShopPlan {
+  shop        String    @id
+  shopGid     String?
+  // Item handles of the active subscription, comma-separated; null = no plan
+  handles     String?
+  trialEndsAt DateTime?
+  checkedAt   DateTime?
+}
