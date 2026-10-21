@@ -33,7 +33,7 @@ export const PROVIDERS: Record<string, WmsProvider> = {
 
 // Systems not yet tested with a real account. They're listed only where
 // WMS_PREVIEW=1 (the Dev site), or for a shop that already connected one.
-const UNTESTED = new Set(["shipbob", "cin7"]);
+const UNTESTED = new Set(["shipbob"]);
 
 export const isListed = (id: string, connected = false) =>
   connected || !UNTESTED.has(id) || process.env.WMS_PREVIEW === "1";

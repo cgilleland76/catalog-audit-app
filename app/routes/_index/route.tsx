@@ -42,8 +42,8 @@ export default function App() {
           <li>
             <strong>Warehouse comparison</strong>
             <span>
-              Checks weights, costs and barcodes against ShipHero or Veeqo,
-              with more warehouse systems coming.
+              Checks weights, costs and barcodes against ShipHero, Veeqo or
+              Cin7 Core.
             </span>
           </li>
           <li>
