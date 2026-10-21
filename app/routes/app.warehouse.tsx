@@ -52,11 +52,30 @@ import {
   mismatchPage,
 } from "../lib/wms/index.server";
 import {
+  COST_SOURCE_KEY,
   MISMATCH_INFO,
+  type CostSource,
   type Mismatch,
   type MismatchCode,
+  type WmsCredentials,
+  type WmsProvider,
   type WmsProviderInfo,
 } from "../lib/wms/types";
+
+// Warehouses to take cost from, cached briefly: the page reloads after every
+// comparison step, and the list rarely changes.
+const costSourceCache = new Map<string, { list: CostSource[]; at: number }>();
+const COST_SOURCE_CACHE_MS = 10 * 60_000;
+
+async function costSources(shop: string, provider: WmsProvider, credentials: WmsCredentials) {
+  if (!provider.costSources) return null;
+  const key = `${shop}:${provider.id}`;
+  const hit = costSourceCache.get(key);
+  if (hit && Date.now() - hit.at < COST_SOURCE_CACHE_MS) return hit.list;
+  const list = await provider.costSources(credentials);
+  costSourceCache.set(key, { list, at: Date.now() });
+  return list;
+}
 
 // ?provider=<id> opens that system's comparison; without it, the page lists
 // every supported system so merchants can connect one or more.
@@ -141,6 +160,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const provider = getProvider(param);
   const catalog = await catalogForPage(session.shop, admin);
+  let costSource = null;
+  if (provider.costSources) {
+    const options = await costSources(session.shop, provider, credentials).catch((error) => {
+      console.warn(`[warehouse] ${provider.id} warehouses: ${error}`);
+      return null;
+    });
+    costSource = { selected: credentials[COST_SOURCE_KEY] ?? "", options };
+  }
   const filters = resultParams(request);
   const [latest, fixes, active, sync] = await Promise.all([
     prisma.wmsComparison.findFirst({
@@ -160,6 +187,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     locked: false as const,
     view: "compare" as const,
     provider: providerInfo(provider),
+    costSource,
     catalogCount: catalog.count,
     scannedAt: catalog.scannedAt,
     scan: catalog.scan,
@@ -222,6 +250,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const value = String(form.get(field.key) ?? "").trim();
       if (value) credentials[field.key] = value;
     }
+    // Updating the key keeps the chosen cost warehouse.
+    const kept = (await loadCredentials(session.shop, provider.id))?.[COST_SOURCE_KEY];
+    if (kept) credentials[COST_SOURCE_KEY] = kept;
     try {
       await provider.testConnection(credentials);
     } catch (error) {
@@ -232,6 +263,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
     await saveCredentials(session.shop, provider.id, credentials);
     return { ok: true, message: `Connected to ${provider.name}` };
+  }
+
+  if (intent === "costSource") {
+    const credentials = await loadCredentials(session.shop, provider.id);
+    if (!credentials || !provider.costSources) return { ok: false, message: "Connect first" };
+    const id = String(form.get("costSource") ?? "");
+    let name = `${provider.name}'s product cost`;
+    if (id) {
+      costSourceCache.delete(`${session.shop}:${provider.id}`);
+      const match = (await costSources(session.shop, provider, credentials))?.find((w) => w.id === id);
+      if (!match) return { ok: false, message: "That warehouse isn't in your account" };
+      name = `the ${match.name} warehouse`;
+      credentials[COST_SOURCE_KEY] = id;
+    } else {
+      delete credentials[COST_SOURCE_KEY];
+    }
+    await saveCredentials(session.shop, provider.id, credentials);
+    return { ok: true, message: `Cost now comes from ${name}. Run the comparison again to use it.` };
   }
 
   if (intent === "disconnect") {
@@ -585,6 +634,7 @@ function ConnectModal({
 
 function WarehouseComparison({
   provider,
+  costSource,
   comparison,
   catalogCount,
   scannedAt,
@@ -954,6 +1004,28 @@ function WarehouseComparison({
       <s-section slot="aside" heading="Connection">
         <s-stack direction="block" gap="base">
           <s-badge tone="success">Connected to {provider.name}</s-badge>
+          {costSource &&
+            (costSource.options ? (
+              <s-select
+                label="Compare cost from"
+                details={`${provider.name} keeps a cost for each warehouse. Takes effect on the next comparison.`}
+                value={costSource.selected}
+                disabled={running}
+                onChange={(e) => submit({ intent: "costSource", costSource: e.currentTarget.value })}
+              >
+                <s-option value="">{provider.name}&apos;s product cost</s-option>
+                {costSource.options.map((w) => (
+                  <s-option key={w.id} value={w.id}>
+                    {w.name} warehouse
+                  </s-option>
+                ))}
+              </s-select>
+            ) : (
+              <s-text color="subdued">
+                Couldn&apos;t load your {provider.name} warehouses to choose where cost
+                comes from. Reload the page to try again.
+              </s-text>
+            ))}
           <s-button variant="tertiary" commandFor={modalId(provider.id)} command="--show">
             Update connection
           </s-button>

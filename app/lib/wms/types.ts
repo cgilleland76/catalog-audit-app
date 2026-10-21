@@ -19,6 +19,14 @@ export type CredentialField = {
 
 export type WmsCredentials = Record<string, string>;
 
+/**
+ * Saved with the credentials: the warehouse whose cost to compare, for systems
+ * that keep a cost per warehouse. Empty means the system's own product cost.
+ */
+export const COST_SOURCE_KEY = "costSource";
+
+export type CostSource = { id: string; name: string };
+
 export type WmsProviderInfo = {
   id: string;
   name: string;
@@ -28,9 +36,11 @@ export type WmsProviderInfo = {
   comparesCost: boolean;
   /** System-specific notes for the "How it compares" list. */
   compareNotes: string[];
+  /** True when the merchant can choose the warehouse cost comes from. */
+  choosesCostSource: boolean;
 };
 
-export interface WmsProvider extends WmsProviderInfo {
+export interface WmsProvider extends Omit<WmsProviderInfo, "choosesCostSource"> {
   /**
    * True when lookup pages through the warehouse's whole catalog (it gets every
    * SKU at once and returns a cursor); false when it looks SKUs up in batches.
@@ -38,6 +48,8 @@ export interface WmsProvider extends WmsProviderInfo {
   pagesCatalog: boolean;
   /** Throws with a readable message if the credentials don't work. */
   testConnection(credentials: WmsCredentials): Promise<void>;
+  /** Warehouses that each keep their own cost, to choose from. */
+  costSources?(credentials: WmsCredentials): Promise<CostSource[]>;
   /**
    * Looks up SKUs until `deadline` (a Date.now() timestamp) is near, so one
    * call fits in a serverless request. Returns the products found and how many

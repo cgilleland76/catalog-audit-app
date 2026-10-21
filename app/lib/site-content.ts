@@ -18,6 +18,7 @@ export const UPDATES: Update[] = [
       "When ShipHero, Veeqo or Cin7 Core stops accepting your saved key (for example after it's refreshed or regenerated), SKU Doctor now says why and where to get the current one.",
       "Update connection: replace a warehouse key from the warehouse's page or the failed-comparison message, without disconnecting first.",
       "Faster ShipHero comparisons: SKU Doctor now looks up several batches of SKUs at once, paced by ShipHero's request allowance, so a comparison runs about ten times faster than before.",
+      "ShipHero cost by warehouse: ShipHero keeps a cost for each warehouse, so you can now choose which warehouse's cost to compare against, on the ShipHero page under Connection.",
     ],
   },
   {

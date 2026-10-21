@@ -1,4 +1,4 @@
-import type { WmsCredentials, WmsProduct, WmsProvider } from "./types";
+import { COST_SOURCE_KEY, type WmsCredentials, type WmsProduct, type WmsProvider } from "./types";
 
 const API = "https://public-api.shiphero.com/graphql";
 const AUTH = "https://public-api.shiphero.com/auth/refresh";
@@ -14,18 +14,23 @@ const PARALLEL = 8;
 // Credits one batch can cost (ShipHero measured about 2 per SKU, 3 for kits).
 const BATCH_CREDITS = BATCH * 3;
 
+// Per-warehouse values, asked for only when a cost warehouse is chosen.
+type WarehouseValues = { warehouse_id: string; value: string | null }[] | null;
+
 type Node = {
   sku: string;
   name: string | null;
   barcode: string | null;
   value: string | null;
   dimensions: { weight: string | null } | null;
+  warehouse_products?: WarehouseValues;
   kit_components:
     | {
         quantity: number | null;
         product: {
           value: string | null;
           dimensions: { weight: string | null } | null;
+          warehouse_products?: WarehouseValues;
         } | null;
       }[]
     | null;
@@ -190,10 +195,20 @@ const num = (raw: string | null | undefined) => {
 
 // Kits often carry no weight or cost of their own; fall back to the sum of
 // their components, matching the Make syncs.
-export function normalize(node: Node): WmsProduct {
+// With a cost warehouse chosen, cost is that warehouse's value; a SKU it
+// doesn't stock has no cost to compare.
+const costOf = (
+  item: { value: string | null; warehouse_products?: WarehouseValues },
+  warehouse?: string,
+) =>
+  warehouse
+    ? num(item.warehouse_products?.find((w) => w.warehouse_id === warehouse)?.value)
+    : num(item.value);
+
+export function normalize(node: Node, costWarehouse?: string): WmsProduct {
   const components = node.kit_components ?? [];
   const ownWeight = parseWeightLb(node.dimensions?.weight);
-  const ownCost = num(node.value);
+  const ownCost = costOf(node, costWarehouse);
 
   const sum = (pick: (c: (typeof components)[number]) => number | null) => {
     if (components.length === 0) return null;
@@ -213,21 +228,22 @@ export function normalize(node: Node): WmsProduct {
     cost:
       ownCost && ownCost > 0
         ? ownCost
-        : (sum((c) => num(c.product?.value)) ?? ownCost),
+        : (sum((c) => (c.product ? costOf(c.product, costWarehouse) : null)) ?? ownCost),
     isKit: components.length > 0,
   };
 }
 
 const escapeSku = (sku: string) => sku.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
-function lookupQuery(skus: string[], customerAccountId?: string) {
+function lookupQuery(skus: string[], customerAccountId?: string, perWarehouse = false) {
   const account = customerAccountId
     ? `, customer_account_id: "${escapeSku(customerAccountId)}"`
     : "";
+  const values = perWarehouse ? " warehouse_products { warehouse_id value }" : "";
   const fields = skus
     .map(
       (sku, i) =>
-        `s${i}: products(sku: "${escapeSku(sku)}"${account}) { data(first: 1) { edges { node { sku name barcode value dimensions { weight } kit_components { quantity product { value dimensions { weight } } } } } } }`,
+        `s${i}: products(sku: "${escapeSku(sku)}"${account}) { data(first: 1) { edges { node { sku name barcode value dimensions { weight }${values} kit_components { quantity product { value dimensions { weight }${values} } } } } } }`,
     )
     .join("\n");
   return `query {\n${fields}\n}`;
@@ -275,14 +291,25 @@ export const shiphero: WmsProvider = {
     }
   },
 
+  async costSources(credentials) {
+    const data = await query<{
+      account: { data: { warehouses: { id: string; identifier: string | null }[] | null } | null };
+    }>(credentials, "query { account { data { warehouses { id identifier } } } }");
+    return (data.account.data?.warehouses ?? []).map((w) => ({
+      id: w.id,
+      name: w.identifier || w.id,
+    }));
+  },
+
   async lookup(credentials, skus, deadline) {
     const found: WmsProduct[] = [];
     let processed = 0;
+    const costWarehouse = credentials[COST_SOURCE_KEY] || undefined;
 
     const lookupBatch = async (batch: string[]) => {
       const data = await query<LookupResult>(
         credentials,
-        lookupQuery(batch, credentials.customerAccountId),
+        lookupQuery(batch, credentials.customerAccountId, !!costWarehouse),
         deadline,
       );
       const hits: WmsProduct[] = [];
@@ -290,7 +317,7 @@ export const shiphero: WmsProvider = {
         const node = data[`s${j}`]?.data?.edges?.[0]?.node;
         // products(sku:) can match loosely; only accept the exact SKU.
         if (node && node.sku?.trim().toLowerCase() === sku.trim().toLowerCase()) {
-          hits.push(normalize(node));
+          hits.push(normalize(node, costWarehouse));
         }
       });
       return hits;

@@ -51,6 +51,7 @@ export const providerInfo = (p: WmsProvider): WmsProviderInfo => ({
   setupHelp: p.setupHelp,
   comparesCost: p.comparesCost,
   compareNotes: p.compareNotes,
+  choosesCostSource: !!p.costSources,
 });
 
 export async function loadCredentials(shop: string, provider: string) {
