@@ -1,7 +1,9 @@
 /* eslint-env node */
-// Netlify background function (up to 15 minutes): advances one scheduled sync
-// by calling the app's /internal/sync with { settingId } until it's finished.
-// Started by /internal/sync's hourly dispatcher; requests are signed both ways.
+// Netlify background function (up to 15 minutes): advances one job by calling
+// the app's /internal/sync until it's finished. A job is a scheduled sync
+// ({ settingId }, started by the hourly dispatcher) or a comparison, fix or
+// undo started from a page ({ comparisonId } / { batchId }). Requests are
+// signed both ways.
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 const sign = (secret) => {
@@ -22,18 +24,19 @@ export default async (request) => {
   const base = process.env.SHOPIFY_APP_URL || process.env.URL;
   const secret = process.env.SHOPIFY_API_SECRET;
   if (!verified(request.headers.get("x-sync-signature"), secret)) return;
-  const { settingId } = await request.json();
+  const job = await request.json();
+  const label = job.settingId ?? job.comparisonId ?? job.batchId;
   const until = Date.now() + 14 * 60_000;
 
   while (Date.now() < until) {
     const response = await fetch(new URL("/internal/sync", base), {
       method: "POST",
       headers: { "x-sync-signature": sign(secret), "content-type": "application/json" },
-      body: JSON.stringify({ settingId }),
+      body: JSON.stringify(job),
       signal: AbortSignal.timeout(60_000),
     }).catch((error) => ({ ok: false, status: String(error) }));
     if (!response.ok) {
-      console.error(`[sync-worker] ${settingId}: ${response.status}`);
+      console.error(`[sync-worker] ${label}: ${response.status}`);
       if (response.status === 401) return;
       await new Promise((r) => setTimeout(r, 10_000));
       continue;
@@ -41,5 +44,14 @@ export default async (request) => {
     const { pending } = await response.json();
     if (!pending) return;
   }
-  console.log(`[sync-worker] ${settingId}: still running; the next hourly run continues it`);
+  if (job.settingId) {
+    console.log(`[sync-worker] ${label}: still running; the next hourly run continues it`);
+    return;
+  }
+  // A page-started job hands over to a fresh worker before this one's time is up.
+  await fetch(new URL("/.netlify/functions/sync-worker-background", base), {
+    method: "POST",
+    headers: { "x-sync-signature": sign(secret), "content-type": "application/json" },
+    body: JSON.stringify(job),
+  }).catch((error) => console.error(`[sync-worker] ${label}: couldn't continue: ${error}`));
 };

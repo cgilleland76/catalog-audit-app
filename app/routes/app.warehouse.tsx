@@ -9,6 +9,7 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import prisma from "../db.server";
+import { runInBackground } from "../lib/background.server";
 import { authenticate } from "../shopify.server";
 import { catalogForPage, type Scope } from "../lib/catalog.server";
 import { getPlan, planSelectionUrl } from "../lib/plans.server";
@@ -258,6 +259,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (!comparison) {
       return { ok: false, message: "Your catalog is still being read; try again in a minute" };
     }
+    await runInBackground({ comparisonId: comparison.id });
     return {
       ok: true,
       message: `Checking ${comparison.total.toLocaleString()} SKUs in ${provider.name}`,
@@ -281,12 +283,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       source: "manual",
     });
     if (!created.batch) return { ok: false, message: created.error ?? "Nothing to fix" };
+    await runInBackground({ batchId: created.batch.id });
     return { ok: true, message: `Fixing ${created.batch.total.toLocaleString()} values in Shopify` };
   }
 
   if (intent === "undo") {
-    const result = await startUndo(session.shop, { batchId: String(form.get("batchId") ?? "") });
+    const batchId = String(form.get("batchId") ?? "");
+    const result = await startUndo(session.shop, { batchId });
     if (result.error) return { ok: false, message: result.error };
+    await runInBackground({ batchId });
     return { ok: true, message: "Undoing the fix" };
   }
 
@@ -757,8 +762,8 @@ function WarehouseComparison({
                 : comparison.checked === 0 && comparison.total > 0
                   ? `Reading products from ${provider.name} to check ${comparison.total.toLocaleString()} SKUs.`
                   : `Checked ${comparison.checked.toLocaleString()} of ${comparison.total.toLocaleString()} SKUs in ${provider.name}.`}{" "}
-              Keep this page open; the comparison pauses while it&apos;s
-              closed and picks up where it left off when you return.
+              It keeps running in the background, so you can leave this page and
+              come back.
             </s-text>
           </s-stack>
         </s-section>

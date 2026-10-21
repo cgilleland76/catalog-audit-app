@@ -84,7 +84,7 @@ export const FAQ: FaqEntry[] = [
   {
     question: "Why does the warehouse comparison take longer?",
     answer:
-      "Warehouse systems limit how fast apps can look up products. SKU Doctor checks your SKUs in batches and pauses when asked to, so a large catalog can take several minutes. Keep the Warehouse page open while it runs; it picks up where it left off if you leave.",
+      "Warehouse systems limit how fast apps can look up products. SKU Doctor checks your SKUs in batches and pauses when asked to, so a large catalog can take a while (ShipHero is the slowest: an hour or more for a big catalog). It runs in the background, so you can leave the page and come back.",
   },
   {
     question: "How do I connect a warehouse system?",

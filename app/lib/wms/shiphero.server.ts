@@ -84,6 +84,8 @@ function creditWaitMs(errors: GqlError[]): number | null {
   return null;
 }
 
+let requestCount = 0;
+
 async function query<T>(
   credentials: WmsCredentials,
   body: string,
@@ -107,10 +109,16 @@ async function query<T>(
       await waitOrStop(2000 * (attempt + 1), deadline);
       continue;
     }
-    const json = (await res.json()) as { data?: T; errors?: GqlError[] };
+    const json = (await res.json()) as { data?: T; errors?: GqlError[]; extensions?: unknown };
+    // Every 50th response, log ShipHero's reported cost so batching can be tuned.
+    if (++requestCount % 50 === 1 && json.extensions) {
+      console.log(`[shiphero] cost sample: ${JSON.stringify(json.extensions).slice(0, 300)}`);
+    }
     if (json.errors?.length) {
       const wait = creditWaitMs(json.errors);
       if (wait !== null) {
+        // ShipHero's numbers (cost, credits left) say how to batch requests better.
+        console.warn(`[shiphero] credits: waiting ${wait} ms: ${JSON.stringify(json.errors[0]).slice(0, 300)}`);
         await waitOrStop(wait, deadline);
         continue;
       }

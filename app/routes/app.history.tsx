@@ -9,6 +9,7 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import prisma from "../db.server";
+import { runInBackground } from "../lib/background.server";
 import { authenticate } from "../shopify.server";
 import { getPlan, planSelectionUrl } from "../lib/plans.server";
 import { canUseWarehouse } from "../lib/plans";
@@ -223,6 +224,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             itemIds: String(form.get("itemIds") ?? "").split(",").filter(Boolean),
           });
     if (result.error) return { ok: false, message: result.error };
+    const active = await activeFix(session.shop);
+    if (active) await runInBackground({ batchId: active.id });
     return { ok: true, message: `Undoing ${result.count?.toLocaleString()} changes` };
   }
 
@@ -340,7 +343,7 @@ function HistoryLoaded(data: Data) {
             <s-spinner accessibilityLabel="Working" size="base" />
             <s-text>
               {data.active.status === "undoing" ? "Undoing changes" : "Fixing values in Shopify"}.
-              Keep this page open; it picks up where it left off if you leave.
+              It keeps running in the background, so you can leave this page.
             </s-text>
           </s-stack>
         </s-banner>
