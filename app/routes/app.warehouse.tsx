@@ -224,7 +224,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         : [],
     fixPreview:
       latest?.status === "done"
-        ? await mismatchPage(latest.id, { fixableOnly: true, take: FIX_PREVIEW_ROWS * 3 })
+        ? // A few rows per field, so each field ticked in the preview has some.
+          (
+            await Promise.all(
+              FIX_FIELDS.map((f) =>
+                mismatchPage(latest.id, {
+                  code: `${f}_mismatch` as MismatchCode,
+                  fixableOnly: true,
+                  take: FIX_PREVIEW_ROWS,
+                }),
+              ),
+            )
+          ).flat()
         : [],
     comparison: latest && { id: latest.id, ...summarize(latest) },
   };
