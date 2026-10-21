@@ -9,6 +9,8 @@ import {
   variantPage,
   type Scope,
 } from "../catalog.server";
+import { dimensionsEnabled } from "../dimensions.server";
+import { formatDims, inchesOf, sameDims, validDims } from "../dimensions";
 import { shiphero } from "./shiphero.server";
 import { shipbob } from "./shipbob.server";
 import { cin7 } from "./cin7.server";
@@ -52,6 +54,7 @@ export const providerInfo = (p: WmsProvider): WmsProviderInfo => ({
   comparesCost: p.comparesCost,
   compareNotes: p.compareNotes,
   choosesCostSource: !!p.costSources,
+  comparesDimensions: !!p.hasDimensions && dimensionsEnabled(),
 });
 
 export async function loadCredentials(shop: string, provider: string) {
@@ -92,6 +95,8 @@ export function compareRows(
   rows: CatalogRow[],
   found: Map<string, WmsProduct>,
   wmsName: string,
+  /** Compare packed dimensions: the warehouse has them and the scan read Shopify's. */
+  withDimensions = false,
 ): Mismatch[] {
   const out: Mismatch[] = [];
   for (const r of rows) {
@@ -138,6 +143,23 @@ export function compareRows(
         wms: w.barcode,
         target: w.barcode,
       });
+    }
+
+    const wmsDims = withDimensions ? validDims(w.dims) : null;
+    if (wmsDims) {
+      const shopifyDims =
+        r.length === null || r.width === null || r.height === null
+          ? null
+          : inchesOf({ length: r.length, width: r.width, height: r.height, unit: r.dimUnit });
+      if (!sameDims(shopifyDims, wmsDims)) {
+        out.push({
+          ...base,
+          code: "dimensions_mismatch",
+          shopify: formatDims(shopifyDims),
+          wms: formatDims(wmsDims),
+          target: wmsDims,
+        });
+      }
     }
   }
   return out;
@@ -268,6 +290,14 @@ export async function advanceComparison(comparisonId: string) {
       }
     }
 
+    // Dimensions only when the scan read Shopify's packed size; an older scan
+    // would make every SKU look different.
+    const withDimensions =
+      c.stage === "compare" &&
+      !!provider.hasDimensions &&
+      dimensionsEnabled() &&
+      !!(await prisma.catalogScan.findUnique({ where: { id: c.scanId }, select: { hasDimensions: true } }))
+        ?.hasDimensions;
     while (c.stage === "compare" && Date.now() + 1500 < deadline) {
       const rows = await variantPage(c.scanId, {
         after: c.rowCursor,
@@ -284,7 +314,7 @@ export async function advanceComparison(comparisonId: string) {
         where: { comparisonId: c.id, skuKey: { in: keys } },
       });
       const map = new Map(found.map((f) => [f.skuKey, JSON.parse(f.data) as WmsProduct]));
-      const mismatches = compareRows(rows, map, provider.name);
+      const mismatches = compareRows(rows, map, provider.name, withDimensions);
       await prisma.$transaction([
         prisma.wmsMismatch.createMany({
           data: mismatches.map((m) => ({

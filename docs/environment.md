@@ -16,6 +16,7 @@ database URL by hand on Netlify.
 | `SUPPORT_EMAIL` | no | Defaults to `support@thirdaxiscustoms.com` |
 | `PLAN_OVERRIDE` | dev only | Fixes the plan on the dev app (no App Store pricing there) |
 | `WMS_PREVIEW` | dev only | `1` lists warehouse systems not yet tested with a real account (ShipBob). Never set it on the public site |
+| `PACKED_DIMENSIONS` | no | `on` compares and fixes packed product size before 1 January 2027, when Shopify's API version 2027-01 (which has it) becomes stable and it turns on by itself; `off` keeps it off. Only the scan and Fix requests use 2027-01 |
 | `DB_SCHEMA` | no | Keeps a site's tables in their own schema |
 | `CREDENTIALS_KEY` | see below | Encrypts stored warehouse credentials. Secret |
 

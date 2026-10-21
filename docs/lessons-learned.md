@@ -42,6 +42,9 @@ Read this before changing anything. Each entry is a mistake already made once.
 | Public app's "Select a plan" page was a 404 | Plans had been created under **Manual pricing (legacy)** | Partner Dashboard → listing → Pricing content → Settings → **Shopify App Pricing** ("Enable Shopify App Pricing"). Verified on a dev store that `currentAppInstallation.activeSubscriptions` still reports the chosen plan, so no Partner API client is needed |
 | A test-only variable can give paid or untested features away on the public app | `PLAN_OVERRIDE` / `WMS_PREVIEW` belong on the Dev site only | `scripts/check-env.mjs` fails the public site's build if either is set, and `env:push` won't send `PLAN_OVERRIDE` to it |
 | Netlify Database bill kept growing with no traffic | The every-5-minutes scheduled function kept the database awake | Scheduler runs hourly and hands each due sync to its own background function |
+| Needed a Shopify field (packed product size) that only exists in the next API version | It arrives in 2027-01, a release candidate until 1 January 2027 | Pass `apiVersion` on just the requests that need it (`admin.graphql(q, { apiVersion })`; a bulk export runs at the version of the request that starts it), behind a switch (`PACKED_DIMENSIONS`) that turns on by itself when the version is stable. Record on each scan whether it read the field, so older scans don't make everything look different |
+| ShipHero comparisons took hours | One 25-SKU request at a time, about 3 s each, while credits refill at 60–180/s | Up to 8 requests at once, sized from the `user_quota` ShipHero returns: about 10× faster |
+| ShipHero cost looked wrong for thousands of SKUs | ShipHero keeps a value per warehouse; its product-level value doesn't follow one warehouse | "Compare cost from" picks the warehouse (`warehouse_products { warehouse_id value }`) |
 
 ## Secrets
 

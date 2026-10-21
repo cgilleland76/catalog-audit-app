@@ -121,6 +121,7 @@ model CatalogScan {
   importOffset    BigInt    @default(0) // bytes imported so far
   objectCount     Int       @default(0)
   rowCount        Int       @default(0)
+  hasDimensions   Boolean   @default(false) // read Shopify's packed product size
   error           String?
   lockedUntil     DateTime? // an import step is running until this time
   startedAt       DateTime  @default(now())
@@ -152,6 +153,10 @@ model CatalogVariant {
   cost              Float?
   weight            Float?
   weightUnit        String?
+  length            Float? // packed product size, in dimUnit
+  width             Float?
+  height            Float?
+  dimUnit           String?
   requiresShipping  Boolean
   inventoryQuantity Int?
 
@@ -185,7 +190,8 @@ model FixBatch {
 }
 
 // One field of one variant in a FixBatch. Values are JSON: weight
-// { value, unit } (newValue { lb }), cost number, barcode string; null = empty.
+// { value, unit } (newValue { lb }), cost number, barcode string, dimensions
+// { length, width, height } in inches; null = empty.
 model FixItem {
   id        String  @id @default(cuid())
   shop      String
@@ -194,7 +200,7 @@ model FixItem {
   productId String
   sku       String
   label     String
-  field     String // weight | cost | barcode
+  field     String // weight | cost | barcode | dimensions
   newValue  String
   oldValue  String? // Shopify's value just before the change
   status    String  @default("pending") // pending | applied | unchanged | failed | reverted | kept | undo_failed

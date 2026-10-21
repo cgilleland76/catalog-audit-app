@@ -1,4 +1,5 @@
 import type { FixField } from "../lib/fixes";
+import { formatDims, validDims, type Dims } from "../lib/dimensions";
 
 // Labels and formatting for fix batches and changes, shared by the Warehouse
 // and History pages.
@@ -55,6 +56,7 @@ export function formatFixValue(field: FixField, raw: string | null): string {
     if (typeof w.value === "number") return w.value === 0 ? "—" : `${Number(w.value.toFixed(4))} ${UNIT[w.unit ?? ""] ?? w.unit ?? ""}`;
   }
   if (field === "cost" && typeof value === "number") return `$${value.toFixed(2)}`;
+  if (field === "dimensions" && typeof value === "object") return formatDims(validDims(value as Dims));
   return String(value);
 }
 

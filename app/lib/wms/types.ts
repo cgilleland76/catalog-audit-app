@@ -1,3 +1,5 @@
+import type { Dims } from "../dimensions";
+
 // A warehouse product normalized to pounds, inches and the shop currency, so
 // every WMS connector can be compared against Shopify the same way.
 export type WmsProduct = {
@@ -6,6 +8,8 @@ export type WmsProduct = {
   barcode: string | null;
   weightLb: number | null;
   cost: number | null;
+  /** Packed size in inches, for systems that compare dimensions. */
+  dims?: Dims | null;
   isKit: boolean;
 };
 
@@ -38,9 +42,14 @@ export type WmsProviderInfo = {
   compareNotes: string[];
   /** True when the merchant can choose the warehouse cost comes from. */
   choosesCostSource: boolean;
+  /** True when packed dimensions are compared (and dimensions are turned on). */
+  comparesDimensions: boolean;
 };
 
-export interface WmsProvider extends Omit<WmsProviderInfo, "choosesCostSource"> {
+export interface WmsProvider
+  extends Omit<WmsProviderInfo, "choosesCostSource" | "comparesDimensions"> {
+  /** True when lookups return packed dimensions. */
+  hasDimensions?: boolean;
   /**
    * True when lookup pages through the warehouse's whole catalog (it gets every
    * SKU at once and returns a cursor); false when it looks SKUs up in batches.
@@ -69,7 +78,8 @@ export type MismatchCode =
   | "not_in_wms"
   | "weight_mismatch"
   | "cost_mismatch"
-  | "barcode_mismatch";
+  | "barcode_mismatch"
+  | "dimensions_mismatch";
 
 export const MISMATCH_INFO: Record<
   MismatchCode,
@@ -78,6 +88,7 @@ export const MISMATCH_INFO: Record<
   weight_mismatch: { label: "Weight differs", tone: "critical" },
   cost_mismatch: { label: "Cost differs", tone: "warning" },
   barcode_mismatch: { label: "Barcode differs", tone: "warning" },
+  dimensions_mismatch: { label: "Dimensions differ", tone: "warning" },
   not_in_wms: { label: "Not in warehouse", tone: "info" },
 };
 
@@ -89,6 +100,6 @@ export type Mismatch = {
   sku: string;
   shopify: string;
   wms: string;
-  /** The warehouse's value, for fixing Shopify: pounds, cost, or barcode. */
-  target?: number | string;
+  /** The warehouse's value, for fixing Shopify: pounds, cost, barcode, or inches. */
+  target?: number | string | Dims;
 };

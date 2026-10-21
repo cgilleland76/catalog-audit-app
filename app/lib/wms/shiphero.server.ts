@@ -1,3 +1,4 @@
+import { validDims } from "../dimensions";
 import { COST_SOURCE_KEY, type WmsCredentials, type WmsProduct, type WmsProvider } from "./types";
 
 const API = "https://public-api.shiphero.com/graphql";
@@ -14,6 +15,13 @@ const PARALLEL = 8;
 // Credits one batch can cost (ShipHero measured about 2 per SKU, 3 for kits).
 const BATCH_CREDITS = BATCH * 3;
 
+type Dimensions = {
+  weight: string | null;
+  length?: string | null;
+  width?: string | null;
+  height?: string | null;
+} | null;
+
 // Per-warehouse values, asked for only when a cost warehouse is chosen.
 type WarehouseValues = { warehouse_id: string; value: string | null }[] | null;
 
@@ -22,14 +30,14 @@ type Node = {
   name: string | null;
   barcode: string | null;
   value: string | null;
-  dimensions: { weight: string | null } | null;
+  dimensions: Dimensions;
   warehouse_products?: WarehouseValues;
   kit_components:
     | {
         quantity: number | null;
         product: {
           value: string | null;
-          dimensions: { weight: string | null } | null;
+          dimensions: Dimensions;
           warehouse_products?: WarehouseValues;
         } | null;
       }[]
@@ -187,6 +195,34 @@ export function parseWeightLb(raw: string | null | undefined): number | null {
   }
 }
 
+// ShipHero returns lengths as text such as "11.5 in" or "29 cm".
+export function parseLengthIn(raw: string | null | undefined): number | null {
+  if (!raw) return null;
+  const m = /^\s*([\d.]+)\s*([a-z]*)/i.exec(raw);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n)) return null;
+  switch (m[2].toLowerCase()) {
+    case "cm":
+      return n / 2.54;
+    case "mm":
+      return n / 25.4;
+    case "m":
+      return n * 39.3700787;
+    case "ft":
+      return n * 12;
+    default:
+      return n; // in or no unit
+  }
+}
+
+const dimsOf = (d: Dimensions) =>
+  validDims({
+    length: parseLengthIn(d?.length) ?? undefined,
+    width: parseLengthIn(d?.width) ?? undefined,
+    height: parseLengthIn(d?.height) ?? undefined,
+  });
+
 const num = (raw: string | null | undefined) => {
   if (raw === null || raw === undefined || raw === "") return null;
   const n = Number(raw);
@@ -229,6 +265,10 @@ export function normalize(node: Node, costWarehouse?: string): WmsProduct {
       ownCost && ownCost > 0
         ? ownCost
         : (sum((c) => (c.product ? costOf(c.product, costWarehouse) : null)) ?? ownCost),
+    // A kit without a size of its own ships as its only component, as in the Make sync.
+    dims:
+      dimsOf(node.dimensions) ??
+      (components.length === 1 ? dimsOf(components[0].product?.dimensions ?? null) : null),
     isKit: components.length > 0,
   };
 }
@@ -243,7 +283,7 @@ function lookupQuery(skus: string[], customerAccountId?: string, perWarehouse = 
   const fields = skus
     .map(
       (sku, i) =>
-        `s${i}: products(sku: "${escapeSku(sku)}"${account}) { data(first: 1) { edges { node { sku name barcode value dimensions { weight }${values} kit_components { quantity product { value dimensions { weight }${values} } } } } } }`,
+        `s${i}: products(sku: "${escapeSku(sku)}"${account}) { data(first: 1) { edges { node { sku name barcode value dimensions { weight length width height }${values} kit_components { quantity product { value dimensions { weight length width height }${values} } } } } } }`,
     )
     .join("\n");
   return `query {\n${fields}\n}`;
@@ -256,6 +296,7 @@ export const shiphero: WmsProvider = {
   name: "ShipHero",
   comparesCost: true,
   pagesCatalog: false,
+  hasDimensions: true,
   compareNotes: [
     "Kits with no weight or cost of their own use the sum of their components",
   ],

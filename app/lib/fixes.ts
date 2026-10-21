@@ -2,19 +2,21 @@ import type { Mismatch, MismatchCode } from "./wms/types";
 
 // Shared by the fix and sync server code and the Warehouse page.
 
-export type FixField = "weight" | "cost" | "barcode";
-export const FIX_FIELDS: FixField[] = ["weight", "cost", "barcode"];
+export type FixField = "weight" | "cost" | "barcode" | "dimensions";
+export const FIX_FIELDS: FixField[] = ["weight", "cost", "barcode", "dimensions"];
 
 export const FIELD_OF: Partial<Record<MismatchCode, FixField>> = {
   weight_mismatch: "weight",
   cost_mismatch: "cost",
   barcode_mismatch: "barcode",
+  dimensions_mismatch: "dimensions",
 };
 
 export const FIELD_LABEL: Record<FixField, string> = {
   weight: "Weight",
   cost: "Cost",
   barcode: "Barcode",
+  dimensions: "Dimensions",
 };
 
 /** Batches older than this can no longer be undone and are deleted. */
@@ -27,7 +29,7 @@ export function fixableField(m: Mismatch): FixField | null {
 }
 
 export function fixCounts(results: Mismatch[]) {
-  const counts: Record<FixField, number> = { weight: 0, cost: 0, barcode: 0 };
+  const counts: Record<FixField, number> = { weight: 0, cost: 0, barcode: 0, dimensions: 0 };
   for (const m of results) {
     const field = fixableField(m);
     if (field) counts[field]++;

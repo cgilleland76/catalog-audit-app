@@ -2,12 +2,13 @@ import type { AdminApiContext } from "@shopify/shopify-app-react-router/server";
 
 import prisma from "../db.server";
 import type { CatalogRow, ScanState } from "./catalog";
+import { DIMENSIONS_API_VERSION, dimensionsEnabled } from "./dimensions.server";
 
 // The catalog is read with a bulk operation: Shopify exports every active and
 // draft variant to a JSONL file in the background (archived products are
 // ignored), then the file is imported a few megabytes per step into
 // CatalogVariant, so catalog size never makes a request run long.
-const BULK_QUERY = `{
+const bulkQuery = (withDimensions: boolean) => `{
   productVariants(query: "product_status:active OR product_status:draft") {
     edges {
       node {
@@ -27,7 +28,13 @@ const BULK_QUERY = `{
             weight {
               value
               unit
-            }
+            }${withDimensions ? `
+            packedDimensions {
+              length
+              width
+              height
+              unit
+            }` : ""}
           }
         }
         product {
@@ -92,7 +99,10 @@ type VariantNode = {
   inventoryItem: {
     requiresShipping: boolean;
     unitCost: { amount: string } | null;
-    measurement: { weight: { value: number; unit: string } | null } | null;
+    measurement: {
+      weight: { value: number; unit: string } | null;
+      packedDimensions?: { length: number; width: number; height: number; unit: string } | null;
+    } | null;
   } | null;
   product: {
     id: string;
@@ -112,6 +122,9 @@ const toNumber = (value: string | number | null | undefined) =>
 export function toRow(v: VariantNode): CatalogRow | null {
   if (!v.product) return null;
   const weight = v.inventoryItem?.measurement?.weight ?? null;
+  const dims = v.inventoryItem?.measurement?.packedDimensions ?? null;
+  // Shopify returns zeros for a size that isn't set.
+  const hasDims = !!dims && dims.length > 0 && dims.width > 0 && dims.height > 0;
   return {
     variantId: v.id,
     variantTitle: v.title,
@@ -130,6 +143,10 @@ export function toRow(v: VariantNode): CatalogRow | null {
     cost: toNumber(v.inventoryItem?.unitCost?.amount),
     weight: weight ? weight.value : null,
     weightUnit: weight ? weight.unit : null,
+    length: hasDims ? dims.length : null,
+    width: hasDims ? dims.width : null,
+    height: hasDims ? dims.height : null,
+    dimUnit: hasDims ? dims.unit : null,
     requiresShipping: v.inventoryItem?.requiresShipping ?? true,
     inventoryQuantity: v.inventoryQuantity,
   };
@@ -192,6 +209,10 @@ export const toVariantData = (shop: string, scanId: string, r: CatalogRow) => ({
   cost: r.cost,
   weight: r.weight,
   weightUnit: r.weightUnit,
+  length: r.length,
+  width: r.width,
+  height: r.height,
+  dimUnit: r.dimUnit,
   requiresShipping: r.requiresShipping,
   inventoryQuantity: r.inventoryQuantity,
 });
@@ -214,6 +235,10 @@ export const variantRow = (v: VariantRecord): CatalogRow => ({
   cost: v.cost,
   weight: v.weight,
   weightUnit: v.weightUnit,
+  length: v.length,
+  width: v.width,
+  height: v.height,
+  dimUnit: v.dimUnit,
   requiresShipping: v.requiresShipping,
   inventoryQuantity: v.inventoryQuantity,
 });
@@ -429,8 +454,12 @@ export async function startScan(shop: string, admin: AdminApiContext) {
   });
   if (active) return toState(active);
 
+  // Packed product size needs a newer API version; the export runs at the
+  // version of the request that starts it.
+  const withDimensions = dimensionsEnabled();
   const response = await admin.graphql(RUN_BULK, {
-    variables: { query: BULK_QUERY },
+    variables: { query: bulkQuery(withDimensions) },
+    ...(withDimensions ? { apiVersion: DIMENSIONS_API_VERSION } : {}),
   });
   const json = (await response.json()) as {
     data?: {
@@ -443,7 +472,7 @@ export async function startScan(shop: string, admin: AdminApiContext) {
   const result = json.data?.bulkOperationRunQuery;
   const scan = await prisma.catalogScan.create({
     data: result?.bulkOperation
-      ? { shop, status: "running", bulkOperationId: result.bulkOperation.id }
+      ? { shop, status: "running", bulkOperationId: result.bulkOperation.id, hasDimensions: withDimensions }
       : {
           shop,
           status: "failed",

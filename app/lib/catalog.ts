@@ -18,6 +18,11 @@ export type CatalogRow = {
   cost: number | null;
   weight: number | null;
   weightUnit: string | null;
+  /** Packed product size in dimUnit; null when not read or unset. */
+  length: number | null;
+  width: number | null;
+  height: number | null;
+  dimUnit: string | null;
   requiresShipping: boolean;
   inventoryQuantity: number | null;
 };

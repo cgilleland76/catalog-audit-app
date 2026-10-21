@@ -681,7 +681,13 @@ function WarehouseComparison({
   // Comparisons and fixes advance only while something asks for the next step.
   const stepping = running || activeFix !== null;
   const [undoId, setUndoId] = useState<string | null>(null);
-  const codes = CODES.filter((k) => k !== "cost_mismatch" || provider.comparesCost);
+  const codes = CODES.filter(
+    (k) =>
+      (k !== "cost_mismatch" || provider.comparesCost) &&
+      (k !== "dimensions_mismatch" || provider.comparesDimensions),
+  );
+  // Fields this system can fix.
+  const fixFields = FIX_FIELDS.filter((f) => codes.includes(`${f}_mismatch` as MismatchCode));
 
   useEffect(() => {
     if (!fetcher.data) return;
@@ -994,6 +1000,7 @@ function WarehouseComparison({
         <FixModal
           preview={fixPreview}
           counts={counts}
+          fixFields={fixFields}
           providerId={provider.id}
           providerName={provider.name}
           canWrite={canWrite}
@@ -1007,6 +1014,7 @@ function WarehouseComparison({
       <SyncSettings
         key={JSON.stringify(sync)}
         sync={sync}
+        fixFields={fixFields}
         providerId={provider.id}
         providerName={provider.name}
         canWrite={canWrite}
@@ -1076,6 +1084,12 @@ function WarehouseComparison({
               ? "Weight in pounds and cost to the cent"
               : "Weight in pounds and barcode"}
           </s-list-item>
+          {provider.comparesDimensions && (
+            <s-list-item>
+              Packed product size in inches, to the hundredth; a kit with no size
+              of its own uses its component&apos;s when it has just one
+            </s-list-item>
+          )}
           {provider.compareNotes.map((note) => (
             <s-list-item key={note}>{note}</s-list-item>
           ))}
@@ -1099,12 +1113,14 @@ const PREVIEW_ROWS = 25;
 function FixModal({
   preview,
   counts: allCounts,
+  fixFields,
   providerId,
   providerName,
   canWrite,
 }: {
   preview: Mismatch[];
   counts: Record<MismatchCode, { total: number; fixable: number }> | null;
+  fixFields: FixField[];
   providerId: string;
   providerName: string;
   canWrite: boolean;
@@ -1114,7 +1130,7 @@ function FixModal({
   const counts = Object.fromEntries(
     FIX_FIELDS.map((f) => [f, allCounts?.[`${f}_mismatch` as MismatchCode].fixable ?? 0]),
   ) as Record<FixField, number>;
-  const [fields, setFields] = useState<FixField[]>(() => FIX_FIELDS.filter((f) => counts[f] > 0));
+  const [fields, setFields] = useState<FixField[]>(() => fixFields.filter((f) => counts[f] > 0));
   const chosen = useMemo(
     () => preview.filter((m) => {
       const field = fixableField(m);
@@ -1145,7 +1161,7 @@ function FixModal({
           old value first, so you can undo this from Fix history.
         </s-paragraph>
         <s-stack direction="inline" gap="base">
-          {FIX_FIELDS.map((f) => (
+          {fixFields.map((f) => (
             <s-checkbox
               key={f}
               label={`${FIELD_LABEL[f]} (${counts[f].toLocaleString()})`}
@@ -1254,11 +1270,13 @@ function UndoModal({ batch, providerId }: { batch: FixRow | null; providerId: st
 /** Aside: run this comparison on a schedule, optionally fixing chosen fields. */
 function SyncSettings({
   sync,
+  fixFields,
   providerId,
   providerName,
   canWrite,
 }: {
   sync: Compare["sync"];
+  fixFields: FixField[];
   providerId: string;
   providerName: string;
   canWrite: boolean;
@@ -1317,7 +1335,7 @@ function SyncSettings({
         </s-select>
         <s-stack direction="block" gap="small-200">
           <s-text>Also fix in Shopify automatically:</s-text>
-          {FIX_FIELDS.map((f) => (
+          {fixFields.map((f) => (
             <s-checkbox
               key={f}
               label={FIELD_LABEL[f]}

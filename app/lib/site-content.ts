@@ -8,7 +8,13 @@ export type Update = {
 };
 
 /** Planned features, shown above the release notes. Move to UPDATES when shipped. */
-export const UPCOMING: { title: string; description: string }[] = [];
+export const UPCOMING: { title: string; description: string }[] = [
+  {
+    title: "Packed product size",
+    description:
+      "Compare each SKU's packed length, width and height in your warehouse system with Shopify's packed product size, and fix differences in Shopify with undo. Starting with ShipHero, in January 2027.",
+  },
+];
 
 export const UPDATES: Update[] = [
   {

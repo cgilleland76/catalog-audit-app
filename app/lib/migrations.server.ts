@@ -336,6 +336,19 @@ ALTER TABLE "WmsMismatch" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "CatalogVariant" ENABLE ROW LEVEL SECURITY;
 `,
   },
+  {
+    name: "20261021180000_packed_dimensions",
+    sql: `
+-- AlterTable
+ALTER TABLE "CatalogScan" ADD COLUMN     "hasDimensions" BOOLEAN NOT NULL DEFAULT false;
+
+-- AlterTable
+ALTER TABLE "CatalogVariant" ADD COLUMN     "length" DOUBLE PRECISION,
+ADD COLUMN     "width" DOUBLE PRECISION,
+ADD COLUMN     "height" DOUBLE PRECISION,
+ADD COLUMN     "dimUnit" TEXT;
+`,
+  },
 ];
 
 const statements = (sql: string) =>

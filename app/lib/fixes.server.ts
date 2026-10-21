@@ -2,6 +2,8 @@ import type { AdminApiContext } from "@shopify/shopify-app-react-router/server";
 
 import prisma from "../db.server";
 import { FIELD_OF, type FixField, UNDO_DAYS } from "./fixes";
+import { type Dims, inchesOf, sameDims, validDims } from "./dimensions";
+import { DIMENSIONS_API_VERSION, dimensionsEnabled } from "./dimensions.server";
 import { TO_LB } from "./wms/index.server";
 
 // "Fix in Shopify": copies warehouse values into Shopify, saving each old value
@@ -9,9 +11,9 @@ import { TO_LB } from "./wms/index.server";
 // short steps (from the page while it polls, or from the scheduled sync).
 
 type Weight = { value: number; unit: string };
-type Value = Weight | { lb: number } | number | string | null;
+type Value = Weight | { lb: number } | Dims | number | string | null;
 
-const CURRENT_VALUES = `#graphql
+const currentValuesQuery = (withDimensions: boolean) => `#graphql
   query FixCurrentValues($ids: [ID!]!) {
     nodes(ids: $ids) {
       ... on ProductVariant {
@@ -28,7 +30,13 @@ const CURRENT_VALUES = `#graphql
             weight {
               value
               unit
-            }
+            }${withDimensions ? `
+            packedDimensions {
+              length
+              width
+              height
+              unit
+            }` : ""}
           }
         }
       }
@@ -62,13 +70,20 @@ type VariantNode = {
   product: { id: string };
   inventoryItem: {
     unitCost: { amount: string } | null;
-    measurement: { weight: Weight | null } | null;
+    measurement: {
+      weight: Weight | null;
+      packedDimensions?: { length: number; width: number; height: number; unit: string } | null;
+    } | null;
   } | null;
 };
+
+const dimsValue = (v: Value): Dims | null =>
+  v && typeof v === "object" && "length" in v ? validDims(v) : null;
 
 const lbOf = (v: Value): number | null => {
   if (v === null || typeof v !== "object") return null;
   if ("lb" in v) return v.lb;
+  if (!("value" in v)) return null;
   return v.value * (TO_LB[v.unit] ?? 1);
 };
 const cents = (n: number) => Math.round(n * 100);
@@ -87,11 +102,14 @@ export function sameValue(field: FixField, current: Value, target: Value) {
     const b = typeof target === "number" ? target : 0;
     return cents(a) === cents(b);
   }
+  if (field === "dimensions") return sameDims(dimsValue(current), dimsValue(target));
   return String(current ?? "").trim() === String(target ?? "").trim();
 }
 
 export function currentValue(field: FixField, node: VariantNode): Value {
   if (field === "weight") return node.inventoryItem?.measurement?.weight ?? null;
+  // In inches, so undo restores the size (Shopify's unit isn't kept).
+  if (field === "dimensions") return inchesOf(node.inventoryItem?.measurement?.packedDimensions);
   if (field === "cost") {
     const amount = node.inventoryItem?.unitCost?.amount;
     return amount === undefined || amount === null ? null : Number(amount);
@@ -111,6 +129,18 @@ export function variantInput(field: FixField, value: Value, node: VariantNode) {
   }
   if (field === "cost") {
     return { inventoryItem: { cost: typeof value === "number" ? value.toFixed(2) : null } };
+  }
+  if (field === "dimensions") {
+    // An empty size is written as zeros, which is how Shopify stores "not set".
+    const d = dimsValue(value);
+    const side = (n: number | undefined) => Number((n ?? 0).toFixed(2));
+    return {
+      inventoryItem: {
+        measurement: {
+          packedDimensions: { length: side(d?.length), width: side(d?.width), height: side(d?.height), unit: "INCHES" },
+        },
+      },
+    };
   }
   return { barcode: typeof value === "string" ? value : null };
 }
@@ -149,7 +179,11 @@ class Throttled extends Error {}
 
 async function gql<T>(admin: AdminApiContext, query: string, variables: Record<string, unknown>) {
   try {
-    const response = await admin.graphql(query, { variables });
+    // Packed product size needs a newer API version for reading and writing.
+    const response = await admin.graphql(query, {
+      variables,
+      ...(dimensionsEnabled() ? { apiVersion: DIMENSIONS_API_VERSION } : {}),
+    });
     const json = (await response.json()) as { data?: T; errors?: { message: string }[] };
     if (json.errors?.length) {
       const message = json.errors.map((e) => e.message).join("; ");
@@ -178,7 +212,11 @@ async function gql<T>(admin: AdminApiContext, query: string, variables: Record<s
 }
 
 async function readVariants(admin: AdminApiContext, ids: string[]) {
-  const data = await gql<{ nodes: (VariantNode | null)[] }>(admin, CURRENT_VALUES, { ids });
+  const data = await gql<{ nodes: (VariantNode | null)[] }>(
+    admin,
+    currentValuesQuery(dimensionsEnabled()),
+    { ids },
+  );
   const map = new Map<string, VariantNode>();
   for (const node of data.nodes) if (node?.id) map.set(node.id, node);
   return map;
@@ -214,7 +252,8 @@ export async function createFixBatch(opts: {
   const total = await prisma.$executeRaw`
     INSERT INTO "FixItem" ("id", "shop", "batchId", "variantId", "productId", "sku", "label", "field", "newValue", "status")
     SELECT gen_random_uuid()::text, "shop", ${batch.id}, "variantId", "productId", "sku", "label",
-      CASE "code" WHEN 'weight_mismatch' THEN 'weight' WHEN 'cost_mismatch' THEN 'cost' ELSE 'barcode' END,
+      CASE "code" WHEN 'weight_mismatch' THEN 'weight' WHEN 'cost_mismatch' THEN 'cost'
+        WHEN 'dimensions_mismatch' THEN 'dimensions' ELSE 'barcode' END,
       CASE "code" WHEN 'weight_mismatch' THEN '{"lb":' || "target" || '}' ELSE "target" END,
       'pending'
     FROM "WmsMismatch"
@@ -346,9 +385,18 @@ async function processChunk(
 
     const byVariant = writes.get(node.product.id) ?? new Map<string, Record<string, unknown>>();
     const input = byVariant.get(node.id) ?? { id: node.id };
-    const add = variantInput(field, target, node);
+    const add = variantInput(field, target, node) as Record<string, unknown>;
     if (add.inventoryItem && input.inventoryItem) {
-      input.inventoryItem = { ...(input.inventoryItem as object), ...add.inventoryItem };
+      // Weight and size both sit under measurement; keep both.
+      const had = input.inventoryItem as Record<string, unknown>;
+      const adds = add.inventoryItem as Record<string, unknown>;
+      input.inventoryItem = {
+        ...had,
+        ...adds,
+        ...(had.measurement && adds.measurement
+          ? { measurement: { ...(had.measurement as object), ...(adds.measurement as object) } }
+          : {}),
+      };
     } else {
       Object.assign(input, add);
     }
@@ -561,6 +609,12 @@ async function updateSavedCopies(
         row.weightUnit = lb === null ? row.weightUnit : unit;
       } else if (item.field === "cost") {
         row.cost = typeof value === "number" ? value : null;
+      } else if (item.field === "dimensions") {
+        const d = dimsValue(value);
+        row.length = d?.length ?? null;
+        row.width = d?.width ?? null;
+        row.height = d?.height ?? null;
+        row.dimUnit = d ? "INCHES" : null;
       } else {
         row.barcode = typeof value === "string" ? value : null;
       }
@@ -570,7 +624,16 @@ async function updateSavedCopies(
       updates.map((r) =>
         prisma.catalogVariant.update({
           where: { id: r.id },
-          data: { weight: r.weight, weightUnit: r.weightUnit, cost: r.cost, barcode: r.barcode },
+          data: {
+            weight: r.weight,
+            weightUnit: r.weightUnit,
+            cost: r.cost,
+            barcode: r.barcode,
+            length: r.length,
+            width: r.width,
+            height: r.height,
+            dimUnit: r.dimUnit,
+          },
         }),
       ),
     );
