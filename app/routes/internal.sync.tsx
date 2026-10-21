@@ -3,6 +3,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { signSync, verifySync } from "../lib/sync-signature.server";
 import { claimLease, dueSettings, releaseLease, runOne, runSync } from "../lib/sync.server";
 import prisma from "../db.server";
+import { runInBackground } from "../lib/background.server";
 import { unauthenticated } from "../shopify.server";
 import { advanceComparison } from "../lib/wms/index.server";
 import { activeFix, advanceFix } from "../lib/fixes.server";
@@ -79,6 +80,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       inline = true;
     }
   }
+  // Comparisons and fixes started from a page whose worker stopped (or that
+  // started before workers ran them) get a new one.
+  const stale = new Date(Date.now() - 2 * 60_000);
+  const idle = { OR: [{ lockedUntil: null }, { lockedUntil: { lt: stale } }] };
+  const comparisons = await prisma.wmsComparison.findMany({
+    where: { status: "running", startedAt: { lt: stale }, ...idle },
+    select: { id: true },
+    take: 200,
+  });
+  const batches = await prisma.fixBatch.findMany({
+    where: { status: { in: ["applying", "undoing"] }, createdAt: { lt: stale }, ...idle },
+    select: { id: true },
+    take: 200,
+  });
+  for (const c of comparisons) await runInBackground({ comparisonId: c.id });
+  for (const b of batches) await runInBackground({ batchId: b.id });
+
   // No background workers (e.g. running locally): advance syncs here.
   const report = inline ? await runSync() : [];
   return Response.json({ dispatched, inline: report });
