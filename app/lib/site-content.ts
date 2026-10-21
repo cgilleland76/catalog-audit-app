@@ -17,6 +17,7 @@ export const UPDATES: Update[] = [
     items: [
       "When ShipHero, Veeqo or Cin7 Core stops accepting your saved key (for example after it's refreshed or regenerated), SKU Doctor now says why and where to get the current one.",
       "Update connection: replace a warehouse key from the warehouse's page or the failed-comparison message, without disconnecting first.",
+      "Faster ShipHero comparisons: SKU Doctor now looks up several batches of SKUs at once, paced by ShipHero's request allowance, so a comparison runs about ten times faster than before.",
     ],
   },
   {
@@ -84,7 +85,7 @@ export const FAQ: FaqEntry[] = [
   {
     question: "Why does the warehouse comparison take longer?",
     answer:
-      "Warehouse systems limit how fast apps can look up products. SKU Doctor checks your SKUs in batches and pauses when asked to, so a large catalog can take a while (ShipHero is the slowest: an hour or more for a big catalog). It runs in the background, so you can leave the page and come back.",
+      "Warehouse systems limit how fast apps can look up products. SKU Doctor checks your SKUs in batches and pauses when asked to, so a large catalog can take a while (ShipHero checks about 20 SKUs a second, so 10,000 SKUs take around 10 minutes). It runs in the background, so you can leave the page and come back.",
   },
   {
     question: "How do I connect a warehouse system?",
