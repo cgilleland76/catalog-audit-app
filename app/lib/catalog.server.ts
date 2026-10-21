@@ -258,6 +258,9 @@ async function refresh(scanId: string, admin: AdminApiContext) {
   try {
     const scan = await prisma.catalogScan.findUnique({ where: { id: scanId } });
     if (!scan || scan.status !== "running" || !scan.bulkOperationId) return;
+    if (Date.now() - scan.startedAt.getTime() > 3 * 3600_000) {
+      return void (await fail(scan.id, "Shopify's export took too long; scan again"));
+    }
 
     const response = await admin.graphql(BULK_STATUS, {
       variables: { id: scan.bulkOperationId },
@@ -289,22 +292,38 @@ async function refresh(scanId: string, admin: AdminApiContext) {
       return;
     }
     // No URL means the shop has no active or draft variants.
+    const fileSize = op.url ? Number(op.fileSize) || (await exportSize(op.url)) : 0;
     await prisma.catalogScan.update({
       where: { id: scan.id },
       data: {
         status: "importing",
         objectCount,
         url: op.url,
-        fileSize: BigInt(op.url ? Number(op.fileSize) || 0 : 0),
+        fileSize: BigInt(fileSize),
         importOffset: 0,
       },
     });
   } catch (error) {
-    await fail(scanId, error instanceof Error ? error.message : String(error));
+    // A network hiccup checking on the export isn't a failed export: the next
+    // check (page poll or sync) tries again.
+    console.warn(`[scan] couldn't check export ${scanId}:`, error instanceof Error ? error.message : error);
   } finally {
     checking.delete(scanId);
   }
 }
+
+/** The export file's size when Shopify doesn't report it, from a 1-byte Range request. */
+async function exportSize(url: string) {
+  const res = await fetch(url, { headers: { range: "bytes=0-0" } });
+  const total = Number(/\/(\d+)$/.exec(res.headers.get("content-range") ?? "")?.[1]);
+  const size = Number.isFinite(total) && total > 0 ? total : Number(res.headers.get("content-length")) || 0;
+  await res.body?.cancel().catch(() => {});
+  if (!size) throw new Error("Couldn't tell the size of Shopify's export");
+  return size;
+}
+
+/** Another step already imported this part of the file. */
+class ImportMoved extends Error {}
 
 // Each import step reads up to CHUNK_BYTES of the export at a time with an
 // HTTP Range request, inserts the complete lines, and saves how far it got.
@@ -352,20 +371,23 @@ export async function importStep(scanId: string) {
 
       const rows = parseJsonl(decoder.decode(bytes.subarray(0, take)));
       const data = rows.map((r) => toVariantData(scan.shop, scan.id, r));
-      const writes = [];
-      for (let i = 0; i < data.length; i += INSERT_BATCH) {
-        writes.push(prisma.catalogVariant.createMany({ data: data.slice(i, i + INSERT_BATCH) }));
-      }
+      const from = offset;
       offset += take;
-      // Rows and progress are saved together, so a retried step never
-      // imports the same lines twice.
-      await prisma.$transaction([
-        ...writes,
-        prisma.catalogScan.update({
-          where: { id: scan.id },
-          data: { importOffset: BigInt(offset), rowCount: { increment: rows.length } },
-        }),
-      ]);
+      // Rows and progress are saved together, and only if no other step has
+      // moved the import on meanwhile, so the same lines are never imported twice.
+      await prisma.$transaction(
+        async (tx) => {
+          const moved = await tx.catalogScan.updateMany({
+            where: { id: scan.id, importOffset: BigInt(from) },
+            data: { importOffset: BigInt(offset), rowCount: { increment: rows.length } },
+          });
+          if (moved.count === 0) throw new ImportMoved();
+          for (let i = 0; i < data.length; i += INSERT_BATCH) {
+            await tx.catalogVariant.createMany({ data: data.slice(i, i + INSERT_BATCH) });
+          }
+        },
+        { timeout: 30_000, maxWait: 10_000 },
+      );
     }
 
     if (!scan.url || offset >= size) {
@@ -373,9 +395,17 @@ export async function importStep(scanId: string) {
         where: { id: scan.id },
         data: { status: "done", url: null, lockedUntil: null, finishedAt: new Date() },
       });
-      // Keep only the latest finished scan.
+      // Keep only the latest finished scan, plus any a running comparison still reads.
+      const inUse = await prisma.wmsComparison.findMany({
+        where: { shop: scan.shop, status: "running" },
+        select: { scanId: true },
+      });
       const old = await prisma.catalogScan.findMany({
-        where: { shop: scan.shop, id: { not: scan.id }, status: { in: ["done", "failed"] } },
+        where: {
+          shop: scan.shop,
+          id: { notIn: [scan.id, ...inUse.map((c) => c.scanId)] },
+          status: { in: ["done", "failed"] },
+        },
         select: { id: true },
       });
       const ids = old.map((o) => o.id);
@@ -387,6 +417,7 @@ export async function importStep(scanId: string) {
     }
     await prisma.catalogScan.update({ where: { id: scan.id }, data: { lockedUntil: null } });
   } catch (error) {
+    if (error instanceof ImportMoved) return; // another step is importing this scan
     await prisma.catalogVariant.deleteMany({ where: { scanId: scan.id } });
     await fail(scan.id, error instanceof Error ? error.message : String(error));
   }
@@ -430,10 +461,17 @@ export async function getScanState(
   shop: string,
   admin: AdminApiContext,
 ): Promise<ScanState | null> {
-  let scan = await prisma.catalogScan.findFirst({
-    where: { shop },
-    orderBy: { startedAt: "desc" },
-  });
+  // A scan in progress comes first, so a newer failed attempt (e.g. two starts
+  // at once) never hides the one Shopify is actually exporting.
+  let scan =
+    (await prisma.catalogScan.findFirst({
+      where: { shop, status: { in: ["running", "importing"] } },
+      orderBy: { startedAt: "desc" },
+    })) ??
+    (await prisma.catalogScan.findFirst({
+      where: { shop },
+      orderBy: { startedAt: "desc" },
+    }));
   if (scan?.status === "running") await refresh(scan.id, admin);
   if (scan) scan = await prisma.catalogScan.findUnique({ where: { id: scan.id } });
   if (scan?.status === "importing") {

@@ -173,8 +173,10 @@ export function auditCatalog(allRows: CatalogRow[], options: AuditOptions): Audi
 
 export function toCsv(header: string[], rows: (string | number | null)[][]) {
   const cell = (v: string | number | null) => {
-    const s = v === null ? "" : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    let s = v === null ? "" : String(v);
+    // Text starting with = + - @ would run as a formula in Excel or Sheets.
+    if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return [header, ...rows].map((r) => r.map(cell).join(",")).join("\n");
 }

@@ -76,9 +76,11 @@ const cents = (n: number) => Math.round(n * 100);
 /** Whether Shopify's current value already equals `target`. */
 export function sameValue(field: FixField, current: Value, target: Value) {
   if (field === "weight") {
+    // Within half a hundredth of a pound: unit conversion and rounding to the
+    // variant's own unit (e.g. kilograms) must not read as a different value.
     const a = lbOf(current) ?? 0;
     const b = lbOf(target) ?? 0;
-    return cents(a) === cents(b);
+    return Math.abs(a - b) < 0.005 + 1e-9;
   }
   if (field === "cost") {
     const a = typeof current === "number" ? current : 0;
@@ -164,6 +166,13 @@ async function gql<T>(admin: AdminApiContext, query: string, variables: Record<s
         "SKU Doctor needs permission to edit products. Open SKU Doctor from your Shopify admin and approve the updated permissions, then try again.",
       );
     }
+    console.error("[fix] Shopify request failed:", message);
+    // Server or network trouble: say so plainly instead of showing Shopify's raw response.
+    if (/networkStatusCode|internal error|fetch failed|ECONN|ETIMEDOUT|socket/i.test(message)) {
+      throw new Error(
+        "Shopify had a temporary problem saving changes. What was saved can be undone; run Fix again to finish the rest.",
+      );
+    }
     throw error;
   }
 }
@@ -230,7 +239,8 @@ export async function startUndo(shop: string, target: { batchId: string } | { it
   const undoable = await prisma.fixBatch.findMany({
     where: {
       shop,
-      status: "done",
+      // "failed" batches (from before fixes ended "done" on errors) can still have applied changes.
+      status: { in: ["done", "failed"] },
       createdAt: { gt: new Date(Date.now() - UNDO_DAYS * 86_400_000) },
       ...("batchId" in target ? { id: target.batchId } : {}),
     },
@@ -261,18 +271,38 @@ export async function startUndo(shop: string, target: { batchId: string } | { it
 }
 
 const STEP_MS = 6000;
-const LOCK_MS = 15000;
+// Longer than any step can take: steps stop starting new products near STEP_MS.
+const LOCK_MS = 30000;
 const CHUNK = 50;
 
 type Item = Awaited<ReturnType<typeof prisma.fixItem.findMany>>[number];
 
-/** Applies (or undoes) one chunk of items: read, write, read back to confirm. */
-async function processChunk(admin: AdminApiContext, items: Item[], undo: boolean) {
+/** Another step took over this batch (our lock expired); stop without saving. */
+class LostLock extends Error {}
+
+/**
+ * Applies (or undoes) one chunk of items: read, write, read back to confirm.
+ *
+ * Old values are saved (status "writing") before anything is written to
+ * Shopify, so a step that stops partway (throttled, timed out, error) never
+ * loses what a value was. The next step resumes "writing" items: if Shopify
+ * already has the new value it's applied, otherwise it's written again. An
+ * interrupted undo resumes the same way: a value already back to the old one
+ * counts as undone.
+ */
+async function processChunk(
+  admin: AdminApiContext,
+  items: Item[],
+  undo: boolean,
+  deadline: number,
+  holdsLock: () => Promise<void>,
+) {
   const before = await readVariants(admin, [...new Set(items.map((i) => i.variantId))]);
   const updates = new Map<string, Partial<Item>>();
   // productId -> variantId -> merged input
   const writes = new Map<string, Map<string, Record<string, unknown>>>();
   const targets: { item: Item; target: Value }[] = [];
+  const presave: [string, Partial<Item>][] = [];
 
   for (const item of items) {
     const field = item.field as FixField;
@@ -285,17 +315,31 @@ async function processChunk(admin: AdminApiContext, items: Item[], undo: boolean
     const written = JSON.parse(item.newValue) as Value;
     let target: Value;
     if (undo) {
+      const old = item.oldValue ? (JSON.parse(item.oldValue) as Value) : null;
+      // Already back to the old value (e.g. an earlier step was interrupted after writing).
+      if (sameValue(field, current, old)) {
+        updates.set(item.id, { status: "reverted", error: null });
+        continue;
+      }
       // Only undo what's still our value; leave later edits alone.
       if (!sameValue(field, current, written)) {
         updates.set(item.id, { status: "kept", error: "Changed in Shopify since the fix" });
         continue;
       }
-      target = item.oldValue ? (JSON.parse(item.oldValue) as Value) : null;
+      target = old;
     } else {
-      updates.set(item.id, { oldValue: JSON.stringify(current) });
-      if (sameValue(field, current, written)) {
-        updates.set(item.id, { oldValue: JSON.stringify(current), status: "unchanged" });
-        continue;
+      if (item.status === "writing") {
+        // Resumed: the old value was saved before an earlier write attempt.
+        if (sameValue(field, current, written)) {
+          updates.set(item.id, { status: "applied", error: null });
+          continue;
+        }
+      } else {
+        if (sameValue(field, current, written)) {
+          updates.set(item.id, { oldValue: JSON.stringify(current), status: "unchanged" });
+          continue;
+        }
+        presave.push([item.id, { oldValue: JSON.stringify(current), status: "writing" }]);
       }
       target = written;
     }
@@ -313,39 +357,61 @@ async function processChunk(admin: AdminApiContext, items: Item[], undo: boolean
     targets.push({ item, target });
   }
 
+  // Old values are saved before the first write.
+  await holdsLock();
+  if (presave.length) {
+    await prisma.$transaction(
+      presave.map(([id, data]) => prisma.fixItem.update({ where: { id }, data })),
+    );
+  }
+
+  const save = () =>
+    prisma.$transaction(
+      [...updates].map(([id, data]) => prisma.fixItem.update({ where: { id }, data })),
+    );
+
   const errors = new Map<string, string>(); // variantId -> message
-  for (const [productId, byVariant] of writes) {
-    const variants = [...byVariant.values()];
-    const data = await gql<{
-      productVariantsBulkUpdate: { userErrors: { field: string[] | null; message: string }[] };
-    }>(admin, UPDATE_VARIANTS, { productId, variants });
-    for (const e of data.productVariantsBulkUpdate.userErrors) {
-      const index = e.field?.[0] === "variants" ? Number(e.field[1]) : NaN;
-      const ids = Number.isInteger(index) && variants[index] ? [String(variants[index].id)] : variants.map((v) => String(v.id));
-      for (const id of ids) errors.set(id, [errors.get(id), e.message].filter(Boolean).join("; "));
+  const done = new Set<string>(); // productIds written in this step
+  try {
+    for (const [productId, byVariant] of writes) {
+      // Leave the rest for the next step rather than outlive the lock.
+      if (Date.now() + 1500 > deadline) break;
+      const variants = [...byVariant.values()];
+      const data = await gql<{
+        productVariantsBulkUpdate: { userErrors: { field: string[] | null; message: string }[] } | null;
+      }>(admin, UPDATE_VARIANTS, { productId, variants });
+      done.add(productId);
+      for (const e of data.productVariantsBulkUpdate?.userErrors ?? []) {
+        const index = e.field?.[0] === "variants" ? Number(e.field[1]) : NaN;
+        const ids = Number.isInteger(index) && variants[index] ? [String(variants[index].id)] : variants.map((v) => String(v.id));
+        for (const id of ids) errors.set(id, [errors.get(id), e.message].filter(Boolean).join("; "));
+      }
     }
-  }
 
-  if (targets.length) {
-    const after = await readVariants(admin, [...new Set(targets.map((t) => t.item.variantId))]);
-    for (const { item, target } of targets) {
-      const node = after.get(item.variantId);
-      const ok = node && sameValue(item.field as FixField, currentValue(item.field as FixField, node), target);
-      updates.set(item.id, {
-        ...updates.get(item.id),
-        status: ok ? (undo ? "reverted" : "applied") : undo ? "undo_failed" : "failed",
-        error: ok ? null : errors.get(item.variantId) || "Shopify didn't save the change",
-      });
+    const written = targets.filter(({ item }) => {
+      const node = before.get(item.variantId);
+      return node && done.has(node.product.id);
+    });
+    if (written.length) {
+      const after = await readVariants(admin, [...new Set(written.map((t) => t.item.variantId))]);
+      for (const { item, target } of written) {
+        const node = after.get(item.variantId);
+        const ok = node && sameValue(item.field as FixField, currentValue(item.field as FixField, node), target);
+        updates.set(item.id, {
+          ...updates.get(item.id),
+          status: ok ? (undo ? "reverted" : "applied") : undo ? "undo_failed" : "failed",
+          error: ok ? null : errors.get(item.variantId) || "Shopify didn't save the change",
+        });
+      }
     }
+  } finally {
+    // Whatever was confirmed is saved even if a later write failed.
+    await holdsLock();
+    await save();
   }
-
-  await prisma.$transaction(
-    [...updates].map(([id, data]) => prisma.fixItem.update({ where: { id }, data })),
-  );
-  return [...updates.entries()].map(([id, data]) => ({
-    item: items.find((i) => i.id === id)!,
-    status: data.status as string,
-  }));
+  return [...updates.entries()]
+    .filter(([, data]) => data.status)
+    .map(([id, data]) => ({ item: items.find((i) => i.id === id)!, status: data.status as string }));
 }
 
 async function recount(batchId: string) {
@@ -359,25 +425,32 @@ async function recount(batchId: string) {
     failed: n("failed"),
     reverted: n("reverted"),
     kept: n("kept"),
-    pending: n("pending"),
+    pending: n("pending", "writing"),
   };
 }
 
 /**
  * Runs the next few seconds of an applying or undoing batch. Safe to call from
- * overlapping requests: only one step runs at a time.
+ * overlapping requests: only the step holding the batch's lock saves anything.
  */
 export async function advanceFix(batchId: string, admin: AdminApiContext) {
   const now = new Date();
+  const token = new Date(now.getTime() + LOCK_MS);
   const claimed = await prisma.fixBatch.updateMany({
     where: {
       id: batchId,
       status: { in: ["applying", "undoing"] },
       OR: [{ lockedUntil: null }, { lockedUntil: { lt: now } }],
     },
-    data: { lockedUntil: new Date(now.getTime() + LOCK_MS) },
+    data: { lockedUntil: token },
   });
   if (claimed.count === 0) return;
+
+  // Confirms this step still holds the lock (the token is our lockedUntil).
+  const holdsLock = async () => {
+    const still = await prisma.fixBatch.count({ where: { id: batchId, lockedUntil: token } });
+    if (!still) throw new LostLock();
+  };
 
   const batch = await prisma.fixBatch.findUniqueOrThrow({ where: { id: batchId } });
   const undo = batch.status === "undoing";
@@ -389,7 +462,7 @@ export async function advanceFix(batchId: string, admin: AdminApiContext) {
   try {
     while (Date.now() + 2000 < deadline) {
       const items = await prisma.fixItem.findMany({
-        where: { batchId, status: undo ? "revert_pending" : "pending" },
+        where: { batchId, status: undo ? "revert_pending" : { in: ["pending", "writing"] } },
         orderBy: { id: "asc" },
         take: CHUNK,
       });
@@ -397,33 +470,50 @@ export async function advanceFix(batchId: string, admin: AdminApiContext) {
         finished = true;
         break;
       }
-      changed.push(...(await processChunk(admin, items, undo)));
+      changed.push(...(await processChunk(admin, items, undo, deadline, holdsLock)));
     }
   } catch (e) {
+    if (e instanceof LostLock) return; // another step has the batch now
     // Throttled: the next step picks up where this one stopped.
     if (!(e instanceof Throttled)) error = e instanceof Error ? e.message : String(e);
   }
 
   if (changed.length) await updateSavedCopies(batch.shop, batch.comparisonId, changed, undo);
 
-  if (undo && error) {
-    // Changes not undone yet stay applied, so they can be undone again later.
-    await prisma.fixItem.updateMany({
-      where: { batchId, status: "revert_pending" },
-      data: { status: "applied" },
-    });
+  if (error) {
+    if (undo) {
+      // Changes not undone yet stay applied, so they can be undone again later.
+      await prisma.fixItem.updateMany({
+        where: { batchId, status: "revert_pending" },
+        data: { status: "applied" },
+      });
+    } else {
+      // Stopped: items never tried are marked so; items mid-write keep their
+      // saved old value and count as applied, so Undo can still restore them
+      // (Undo leaves alone anything that isn't our value).
+      await prisma.fixItem.updateMany({
+        where: { batchId, status: "pending" },
+        data: { status: "failed", error: "Not attempted: the fix stopped early" },
+      });
+      await prisma.fixItem.updateMany({
+        where: { batchId, status: "writing" },
+        data: { status: "applied", error: "Not confirmed: the fix stopped early" },
+      });
+    }
   }
   const counts = await recount(batchId);
-  await prisma.fixBatch.update({
-    where: { id: batchId },
+  await prisma.fixBatch.updateMany({
+    where: { id: batchId, lockedUntil: token },
     data: {
       applied: counts.applied,
       failed: counts.failed,
       reverted: counts.reverted,
       kept: counts.kept,
       lockedUntil: null,
+      // A fix that stops on an error ends "done" with the error shown, so what
+      // it did apply can still be undone.
       ...(error
-        ? { status: undo ? "done" : "failed", error, finishedAt: new Date() }
+        ? { status: "done", error, finishedAt: new Date() }
         : finished
           ? undo
             ? counts.stillApplied > 0
@@ -510,7 +600,11 @@ async function updateSavedCopies(
 
 /** The shop's active batch (applying or undoing), if any. */
 export const activeFix = (shop: string) =>
-  prisma.fixBatch.findFirst({ where: { shop, status: { in: ["applying", "undoing"] } } });
+  prisma.fixBatch.findFirst({
+    where: { shop, status: { in: ["applying", "undoing"] } },
+    // Newest first, so undoing several fixes of one value ends at the oldest value.
+    orderBy: { createdAt: "desc" },
+  });
 
 /**
  * History is kept for UNDO_DAYS: older fixes (no longer undoable), scheduled
@@ -593,7 +687,7 @@ export async function batchRows(batches: Batch[]) {
       kept: b.kept,
       error: b.error,
       createdAt: b.createdAt.toISOString(),
-      undoable: b.status === "done" && b.createdAt.getTime() > cutoff ? undoable : 0,
+      undoable: (b.status === "done" || b.status === "failed") && b.createdAt.getTime() > cutoff ? undoable : 0,
     };
   });
 }

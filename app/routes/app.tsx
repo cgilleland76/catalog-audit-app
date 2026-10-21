@@ -57,9 +57,35 @@ function NavigationLoading() {
 export function ErrorBoundary() {
   const error = useRouteError();
   if (isRouteErrorResponse(error)) {
-    return <div dangerouslySetInnerHTML={{ __html: error.data || "Handling response" }} />;
+    // Shopify's own pages (App Bridge reload, exit iframe) arrive as a 200 HTML body.
+    if (error.status === 200 && typeof error.data === "string") {
+      return <div dangerouslySetInnerHTML={{ __html: error.data || "Handling response" }} />;
+    }
+    return <ProblemPage detail={typeof error.data === "string" ? error.data : null} />;
   }
-  return boundary.error(error);
+  console.error(error);
+  return <ProblemPage detail={null} />;
+}
+
+// Shown instead of a blank error page. Plain HTML: the app frame and Polaris
+// aren't loaded when a page fails.
+function ProblemPage({ detail }: { detail: string | null }) {
+  return (
+    <div style={{ fontFamily: "Inter, system-ui, sans-serif", maxWidth: 560, margin: "48px auto", padding: "0 16px" }}>
+      <h1 style={{ fontSize: 20 }}>Something went wrong loading this page</h1>
+      <p>
+        This is usually temporary. Reload to try again. If it keeps happening, email{" "}
+        <a href="mailto:support@thirdaxiscustoms.com">support@thirdaxiscustoms.com</a>
+        {detail ? ` and include: “${detail}”` : ""}.
+      </p>
+      <p style={{ display: "flex", gap: 12 }}>
+        <button type="button" onClick={() => window.location.reload()}>
+          Reload
+        </button>
+        <a href="/app">Back to SKU Doctor</a>
+      </p>
+    </div>
+  );
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

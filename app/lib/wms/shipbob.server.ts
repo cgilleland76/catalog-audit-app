@@ -61,11 +61,18 @@ function nextUrlOf(body: unknown, link: string | null, base: string): string | n
   const o = (Array.isArray(body) ? {} : (body ?? {})) as Json;
   const pagination = (o.pagination ?? {}) as Json;
   const next = (o.next ?? pagination.next) as string | undefined;
-  if (typeof next === "string" && next) {
-    return next.startsWith("http") ? next : `${base}${next.startsWith("/") ? "" : "/"}${next}`;
+  const raw =
+    typeof next === "string" && next
+      ? next
+      : (link && /<([^>]+)>;\s*rel="?next"?/i.exec(link)?.[1]) || null;
+  if (!raw) return null;
+  // The token is sent with the request: only ever follow ShipBob's own host.
+  try {
+    const url = new URL(raw, `${base}/`);
+    return url.origin === new URL(base).origin ? url.toString() : null;
+  } catch {
+    return null;
   }
-  const m = link && /<([^>]+)>;\s*rel="?next"?/i.exec(link);
-  return m ? m[1] : null;
 }
 
 /** ShipBob weights are ounces as a number, or `{ value|weight, unit }`. */

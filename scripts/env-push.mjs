@@ -56,6 +56,10 @@ const env = Object.fromEntries(
 const skipped = [];
 const pushed = KEYS.filter((k) => {
   if (!env[k]?.trim()) return false;
+  if (k === "PLAN_OVERRIDE" && site === "sku-doctor") {
+    console.error("[env-push] PLAN_OVERRIDE is for the Dev site only; not pushing it to sku-doctor.");
+    return false;
+  }
   if (k === "CREDENTIALS_KEY" && !allowCredentialsKey) {
     skipped.push(k);
     return false;

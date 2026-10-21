@@ -98,5 +98,5 @@ export const FAQ: FaqEntry[] = [
   },
 ];
 
-/** Contact address for support, set per site with the SUPPORT_EMAIL variable. */
-export const supportEmail = () => process.env.SUPPORT_EMAIL?.trim() || null;
+/** Contact address for support: the SUPPORT_EMAIL variable, or our support address. */
+export const supportEmail = () => process.env.SUPPORT_EMAIL?.trim() || "support@thirdaxiscustoms.com";

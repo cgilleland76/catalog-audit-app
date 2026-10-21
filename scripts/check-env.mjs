@@ -21,6 +21,17 @@ if (!has("CREDENTIALS_KEY")) {
       `Rotating the Shopify API secret would make them unreadable. See docs/environment.md.`,
   );
 }
+// Test-only variables give paid or untested features away on the public app.
+const TEST_ONLY = ["PLAN_OVERRIDE", "WMS_PREVIEW"];
+if (process.env.SITE_NAME === "sku-doctor") {
+  const set = TEST_ONLY.filter(has);
+  if (set.length) {
+    console.error(
+      `[env-check] ${set.join(", ")} must not be set on the public site "sku-doctor" (Dev site only). Delete it in Netlify and redeploy.`,
+    );
+    process.exit(1);
+  }
+}
 if (missing.length) {
   console.error(
     `[env-check] Missing required environment variables${where}: ${missing.join(", ")}\n` +

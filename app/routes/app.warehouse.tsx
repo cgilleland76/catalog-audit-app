@@ -213,6 +213,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   );
 
   if (intent === "connect") {
+    if (!isListed(provider.id, !!(await loadCredentials(session.shop, provider.id)))) {
+      return { ok: false, message: `${provider.name} isn't available yet` };
+    }
     const credentials: Record<string, string> = {};
     for (const field of provider.credentialFields) {
       const value = String(form.get(field.key) ?? "").trim();
@@ -232,7 +235,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "disconnect") {
     await deleteCredentials(session.shop, provider.id);
-    return { ok: true, message: `Disconnected ${provider.name}` };
+    // Its scheduled sync can't run without the connection.
+    await prisma.syncSetting.updateMany({
+      where: { shop: session.shop, provider: provider.id },
+      data: { enabled: false },
+    });
+    return { ok: true, message: `Disconnected ${provider.name}; its scheduled sync is off` };
   }
 
   if (intent === "compare") {

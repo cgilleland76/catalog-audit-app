@@ -4,7 +4,7 @@ import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import { getScanState, startScan, type Scope } from "./catalog.server";
 import { FIX_FIELDS, FREQUENCIES, type FixField, type Frequency } from "./fixes";
-import { advanceFix, createFixBatch } from "./fixes.server";
+import { advanceFix, createFixBatch, pruneHistory } from "./fixes.server";
 import { getPlan } from "./plans.server";
 import { canUseWarehouse, VARIANT_LIMIT } from "./plans";
 import {
@@ -83,6 +83,8 @@ type Setting = NonNullable<Awaited<ReturnType<typeof prisma.syncSetting.findUniq
 
 /** Ends the current run: logs it (see History) and schedules the next one. */
 async function finish(s: Setting, status: "done" | "failed" | "skipped", message: string) {
+  // Uninstalled mid-run: the shop's data is gone; don't recreate any of it.
+  if (!(await prisma.syncSetting.findUnique({ where: { id: s.id }, select: { id: true } }))) return;
   const run = {
     status,
     message,
@@ -95,6 +97,8 @@ async function finish(s: Setting, status: "done" | "failed" | "skipped", message
   } else {
     await prisma.syncRun.create({ data: { shop: s.shop, provider: s.provider, ...run } });
   }
+  // Keep history within its 90 days for shops that only use scheduled syncs.
+  await pruneHistory(s.shop).catch(() => {});
   return prisma.syncSetting.update({
     where: { id: s.id },
     data: {
@@ -121,11 +125,17 @@ export async function advanceSync(setting: Setting, until: number): Promise<void
   let admin: AdminApiContext;
   try {
     ({ admin } = await unauthenticated.admin(shop));
-  } catch {
-    await prisma.syncSetting.update({
-      where: { id: s.id },
-      data: { enabled: false, stage: "idle", lastStatus: "failed", lastMessage: "SKU Doctor is no longer installed" },
-    });
+  } catch (error) {
+    // Only a missing session means the app was uninstalled; anything else
+    // (database or network trouble) fails this run and keeps the schedule.
+    if (!(await prisma.session.findFirst({ where: { shop }, select: { id: true } }))) {
+      await prisma.syncSetting.update({
+        where: { id: s.id },
+        data: { enabled: false, stage: "idle", lastStatus: "failed", lastMessage: "SKU Doctor is no longer installed" },
+      });
+      return;
+    }
+    await finish(s, "failed", error instanceof Error ? error.message : String(error));
     return;
   }
 
@@ -180,8 +190,9 @@ export async function advanceSync(setting: Setting, until: number): Promise<void
         await finish(s, "failed", scan.error ?? "Couldn't read the Shopify catalog");
         return;
       }
+      // Reuse a comparison already running on this catalog read with the same scope.
       const running = await prisma.wmsComparison.findFirst({
-        where: { shop, provider: s.provider, status: "running" },
+        where: { shop, provider: s.provider, status: "running", scanId: s.scanId ?? "", scope: s.scope },
       });
       let comparisonId = running?.id;
       if (!comparisonId) {
@@ -350,14 +361,18 @@ export async function runSync(budgetMs = 20_000) {
   for (const setting of settings) {
     // Leave room for one more comparison or fix step (about 6 seconds).
     if (Date.now() > until - 7000) break;
+    // A background worker may already have this sync.
+    if (!(await claimLease(setting.id))) continue;
     try {
       await advanceSync(setting, until - 7000);
       report.push(`${setting.shop}/${setting.provider}: ok`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const current = await prisma.syncSetting.findUnique({ where: { id: setting.id } });
-      await finish(current ?? setting, "failed", message);
-      report.push(`${setting.shop}/${setting.provider}: ${message}`);
+      if (current) await finish(current, "failed", message);
+      report.push(`${setting.shop}/${setting.provider}: failed`);
+    } finally {
+      await releaseLease(setting.id);
     }
   }
   return report;

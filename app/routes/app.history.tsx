@@ -29,7 +29,7 @@ import {
   pruneHistory,
   startUndo,
 } from "../lib/fixes.server";
-import { PROVIDERS } from "../lib/wms/index.server";
+import { isListed, PROVIDERS } from "../lib/wms/index.server";
 
 // Every comparison and fix (manual or scheduled) across warehouse systems, and
 // every value SKU Doctor changed, with undo for whole runs or single changes.
@@ -105,7 +105,9 @@ async function findChanges(
         status: i.status,
         error: i.error,
         undoable:
-          i.status === "applied" && batch.status === "done" && batch.createdAt.getTime() > cutoff,
+          i.status === "applied" &&
+          (batch.status === "done" || batch.status === "failed") &&
+          batch.createdAt.getTime() > cutoff,
       };
     }),
   };
@@ -120,7 +122,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const f = params(request);
   await pruneHistory(shop);
 
-  const providers = Object.values(PROVIDERS).map((p) => ({ id: p.id, name: p.name }));
+  const providers = Object.values(PROVIDERS)
+    .filter((p) => isListed(p.id))
+    .map((p) => ({ id: p.id, name: p.name }));
   const active = await activeFix(shop);
   const base = {
     locked: false as const,

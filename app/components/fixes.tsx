@@ -25,6 +25,7 @@ export function fixStatus(b: FixBatchRow): { label: string; tone: Tone } {
   if (b.status === "undoing") return { label: "Undoing…", tone: "info" };
   if (b.status === "failed") return { label: "Failed", tone: "critical" };
   if (b.status === "undone") return { label: "Undone", tone: "neutral" };
+  if (b.error) return { label: "Stopped early", tone: "warning" };
   if (b.reverted > 0) return { label: "Partly undone", tone: "warning" };
   return { label: "Fixed", tone: "success" };
 }
@@ -33,7 +34,7 @@ export function fixSummary(b: FixBatchRow) {
   const n = (x: number) => x.toLocaleString();
   if (b.status === "applying") return `${n(b.applied)} of ${n(b.total)} done`;
   if (b.status === "undoing") return `${n(b.reverted)} restored so far`;
-  if (b.status === "failed") return b.error ?? "Stopped";
+  if (b.status === "failed" && !b.applied) return b.error ?? "Stopped";
   const parts = [`${n(b.applied)} of ${n(b.total)} ${b.total === 1 ? "value" : "values"} set`];
   if (b.failed) parts.push(`${n(b.failed)} failed`);
   if (b.reverted) parts.push(`${n(b.reverted)} undone`);
@@ -59,6 +60,7 @@ export function formatFixValue(field: FixField, raw: string | null): string {
 
 export const CHANGE_STATUS: Record<string, { label: string; tone: Tone }> = {
   pending: { label: "Waiting", tone: "info" },
+  writing: { label: "Saving…", tone: "info" },
   applied: { label: "Applied", tone: "success" },
   unchanged: { label: "Already set", tone: "neutral" },
   failed: { label: "Failed", tone: "critical" },
