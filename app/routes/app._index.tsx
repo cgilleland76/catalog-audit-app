@@ -89,6 +89,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   };
 };
 
+const WEIGHT_UNIT: Record<string, string> = { POUNDS: "lb", OUNCES: "oz", GRAMS: "g", KILOGRAMS: "kg" };
+
 export default function AuditPage() {
   const data = useLoaderData<typeof loader>();
   const { scan, running, rescan } = useCatalogScan(data.scan, data.scannedAt);
@@ -238,12 +240,13 @@ export default function AuditPage() {
                     <s-table-cell>${r.price.toFixed(2)}</s-table-cell>
                     <s-table-cell>{r.cost === null ? "—" : `$${r.cost.toFixed(2)}`}</s-table-cell>
                     <s-table-cell>
-                      {r.weight ? `${r.weight} ${r.weightUnit?.toLowerCase()}` : "—"}
+                      {r.weight ? `${r.weight} ${WEIGHT_UNIT[r.weightUnit ?? ""] ?? r.weightUnit?.toLowerCase() ?? ""}` : "—"}
                     </s-table-cell>
                     <s-table-cell>
                       <s-stack direction="block" gap="small-300">
                         {r.issues.map((i) => (
-                          <s-stack key={i.code} direction="inline" gap="small-300">
+                          // Detail under the badge, so long details wrap in the column.
+                          <s-stack key={i.code} direction="block" gap="small-500">
                             <s-badge tone={ISSUE_INFO[i.code].severity}>
                               {ISSUE_INFO[i.code].label}
                             </s-badge>
