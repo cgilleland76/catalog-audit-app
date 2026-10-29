@@ -35,6 +35,7 @@ import {
 } from "../lib/fixes";
 import { parseFields, saveSyncSetting } from "../lib/sync.server";
 import { UpgradeSection } from "../components/Upgrade";
+import { Updating, dimmed, usePendingQuery } from "../components/Updating";
 import { ScanBanner, useCatalogScan } from "../components/CatalogScan";
 import { fixStatus, fixSummary, hideModal } from "../components/fixes";
 import { count, downloadFile, numericId, toCsv } from "../lib/catalog";
@@ -670,6 +671,9 @@ function WarehouseComparison({
   const exporter = useFetcher<typeof action>();
   const [scope, setScope] = useState<Scope>(comparison?.scope ?? "active");
   const filter = filters.issue;
+  // While new results load, show the chosen filter at once and say so.
+  const pending = usePendingQuery("/app/warehouse");
+  const shownFilter = pending ? (pending.get("issue") ?? "all") : filter;
   // Filters live in the address, so the server sends only the rows shown.
   const show = (issue: MismatchCode | "all", limit = PAGE_SIZE) =>
     navigate(`/app/warehouse?provider=${provider.id}&issue=${issue}&limit=${limit}`, {
@@ -856,6 +860,7 @@ function WarehouseComparison({
                 finished{" "}
                 {new Date(comparison.finishedAt ?? comparison.startedAt).toLocaleString()}
               </s-text>
+              {pending && <Updating />}
               {fixable > 0 && (
                 <s-button
                   commandFor="fix-modal"
@@ -870,57 +875,62 @@ function WarehouseComparison({
               {codes.map((k) => (
                 <s-clickable-chip
                   key={k}
-                  color={filter === k ? "strong" : "base"}
+                  color={shownFilter === k ? "strong" : "base"}
                   onClick={() => show(k)}
                 >
                   {MISMATCH_INFO[k].label} ({total(k).toLocaleString()})
                 </s-clickable-chip>
               ))}
               <s-clickable-chip
-                color={filter === "all" ? "strong" : "base"}
+                color={shownFilter === "all" ? "strong" : "base"}
                 onClick={() => show("all")}
               >
                 All ({differences.toLocaleString()})
               </s-clickable-chip>
             </s-stack>
 
-            {results.length === 0 ? (
-              <s-paragraph>Nothing here — Shopify and {provider.name} agree.</s-paragraph>
-            ) : (
-              <s-table>
-                <s-table-header-row>
-                  <s-table-header listSlot="primary">Product</s-table-header>
-                  <s-table-header listSlot="secondary">SKU</s-table-header>
-                  <s-table-header listSlot="inline">Issue</s-table-header>
-                  <s-table-header>Shopify</s-table-header>
-                  <s-table-header>{provider.name}</s-table-header>
-                </s-table-header-row>
-                <s-table-body>
-                  {results.map((m) => (
-                    <s-table-row key={`${m.variantId}-${m.code}`}>
-                      <s-table-cell>
-                        <s-link
-                          href={`shopify://admin/products/${numericId(m.productId)}/variants/${numericId(m.variantId)}`}
-                          target="_blank"
-                        >
-                          {m.label}
-                        </s-link>
-                      </s-table-cell>
-                      <s-table-cell>{m.sku}</s-table-cell>
-                      <s-table-cell>
-                        <s-badge tone={MISMATCH_INFO[m.code].tone}>
-                          {MISMATCH_INFO[m.code].label}
-                        </s-badge>
-                      </s-table-cell>
-                      <s-table-cell>{m.shopify}</s-table-cell>
-                      <s-table-cell>{m.wms}</s-table-cell>
-                    </s-table-row>
-                  ))}
-                </s-table-body>
-              </s-table>
-            )}
+            <div style={dimmed(!!pending)} aria-busy={!!pending}>
+              {results.length === 0 ? (
+                <s-paragraph>Nothing here — Shopify and {provider.name} agree.</s-paragraph>
+              ) : (
+                <s-table>
+                  <s-table-header-row>
+                    <s-table-header listSlot="primary">Product</s-table-header>
+                    <s-table-header listSlot="secondary">SKU</s-table-header>
+                    <s-table-header listSlot="inline">Issue</s-table-header>
+                    <s-table-header>Shopify</s-table-header>
+                    <s-table-header>{provider.name}</s-table-header>
+                  </s-table-header-row>
+                  <s-table-body>
+                    {results.map((m) => (
+                      <s-table-row key={`${m.variantId}-${m.code}`}>
+                        <s-table-cell>
+                          <s-link
+                            href={`shopify://admin/products/${numericId(m.productId)}/variants/${numericId(m.variantId)}`}
+                            target="_blank"
+                          >
+                            {m.label}
+                          </s-link>
+                        </s-table-cell>
+                        <s-table-cell>{m.sku}</s-table-cell>
+                        <s-table-cell>
+                          <s-badge tone={MISMATCH_INFO[m.code].tone}>
+                            {MISMATCH_INFO[m.code].label}
+                          </s-badge>
+                        </s-table-cell>
+                        <s-table-cell>{m.shopify}</s-table-cell>
+                        <s-table-cell>{m.wms}</s-table-cell>
+                      </s-table-row>
+                    ))}
+                  </s-table-body>
+                </s-table>
+              )}
+            </div>
             {shown > results.length && (
-              <s-button onClick={() => show(filter, filters.limit + PAGE_SIZE)}>
+              <s-button
+                onClick={() => show(filter, filters.limit + PAGE_SIZE)}
+                {...(pending ? { loading: true } : {})}
+              >
                 Show more ({(shown - results.length).toLocaleString()} left)
               </s-button>
             )}

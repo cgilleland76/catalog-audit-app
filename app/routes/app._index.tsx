@@ -13,6 +13,7 @@ import { auditScan, type AuditFilters } from "../lib/audit.server";
 import { getPlan, planSelectionUrl } from "../lib/plans.server";
 import { PLANS, VARIANT_LIMIT } from "../lib/plans";
 import { ScanBanner, ScanProgress, useCatalogScan } from "../components/CatalogScan";
+import { Updating, dimmed, usePendingQuery } from "../components/Updating";
 import {
   ISSUE_INFO,
   downloadFile,
@@ -99,6 +100,9 @@ export default function AuditPage() {
   const { filters, audit, cap } = data;
   const [search, setSearch] = useState(filters.q);
   const [margin, setMargin] = useState(String(filters.minMargin));
+  // While new results load, show the chosen filter at once and say so.
+  const pending = usePendingQuery("/app");
+  const shownIssue = pending ? (pending.get("issue") ?? "all") : filters.issue;
 
   const go = (change: Partial<AuditFilters>) => {
     const next = { ...filters, limit: PAGE_SIZE, ...change };
@@ -177,15 +181,18 @@ export default function AuditPage() {
 
       <s-section heading="Summary">
         <s-stack direction="block" gap="base">
-          <s-text>
-            Scanned {audit.scanned.toLocaleString()} variants ·{" "}
-            {audit.withIssues.toLocaleString()} have issues ·{" "}
-            {audit.critical.toLocaleString()} critical · last scan{" "}
-            {new Date(data.scannedAt ?? "").toLocaleString()}
-          </s-text>
+          <s-stack direction="inline" gap="base" alignItems="center">
+            <s-text>
+              Scanned {audit.scanned.toLocaleString()} variants ·{" "}
+              {audit.withIssues.toLocaleString()} have issues ·{" "}
+              {audit.critical.toLocaleString()} critical · last scan{" "}
+              {new Date(data.scannedAt ?? "").toLocaleString()}
+            </s-text>
+            {pending && <Updating />}
+          </s-stack>
           <s-stack direction="inline" gap="small-200">
             <s-clickable-chip
-              color={filters.issue === "all" ? "strong" : "base"}
+              color={shownIssue === "all" ? "strong" : "base"}
               onClick={() => go({ issue: "all" })}
             >
               All issues ({audit.withIssues.toLocaleString()})
@@ -193,7 +200,7 @@ export default function AuditPage() {
             {ISSUE_CODES.filter((k) => audit.counts[k] > 0).map((k) => (
               <s-clickable-chip
                 key={k}
-                color={filters.issue === k ? "strong" : "base"}
+                color={shownIssue === k ? "strong" : "base"}
                 onClick={() => go({ issue: k })}
               >
                 {ISSUE_INFO[k].label} ({audit.counts[k].toLocaleString()})
@@ -213,55 +220,61 @@ export default function AuditPage() {
             onInput={(e) => setSearch(e.currentTarget.value)}
             onChange={(e) => go({ q: e.currentTarget.value.trim() })}
           />
-          {audit.rows.length === 0 ? (
-            <s-paragraph>No issues match. Nice work.</s-paragraph>
-          ) : (
-            <s-table>
-              <s-table-header-row>
-                <s-table-header listSlot="primary">Product</s-table-header>
-                <s-table-header listSlot="secondary">SKU</s-table-header>
-                <s-table-header format="currency">Price</s-table-header>
-                <s-table-header format="currency">Cost</s-table-header>
-                <s-table-header>Weight</s-table-header>
-                <s-table-header listSlot="inline">Issues</s-table-header>
-              </s-table-header-row>
-              <s-table-body>
-                {audit.rows.map((r) => (
-                  <s-table-row key={r.variantId}>
-                    <s-table-cell>
-                      <s-link
-                        href={`shopify://admin/products/${numericId(r.productId)}/variants/${numericId(r.variantId)}`}
-                        target="_blank"
-                      >
-                        {variantLabel(r)}
-                      </s-link>
-                    </s-table-cell>
-                    <s-table-cell>{r.sku ?? "—"}</s-table-cell>
-                    <s-table-cell>${r.price.toFixed(2)}</s-table-cell>
-                    <s-table-cell>{r.cost === null ? "—" : `$${r.cost.toFixed(2)}`}</s-table-cell>
-                    <s-table-cell>
-                      {r.weight ? `${r.weight} ${WEIGHT_UNIT[r.weightUnit ?? ""] ?? r.weightUnit?.toLowerCase() ?? ""}` : "—"}
-                    </s-table-cell>
-                    <s-table-cell>
-                      <s-stack direction="block" gap="small-300">
-                        {r.issues.map((i) => (
-                          // Detail under the badge, so long details wrap in the column.
-                          <s-stack key={i.code} direction="block" gap="small-500">
-                            <s-badge tone={ISSUE_INFO[i.code].severity}>
-                              {ISSUE_INFO[i.code].label}
-                            </s-badge>
-                            <s-text color="subdued">{i.detail}</s-text>
-                          </s-stack>
-                        ))}
-                      </s-stack>
-                    </s-table-cell>
-                  </s-table-row>
-                ))}
-              </s-table-body>
-            </s-table>
-          )}
+          {pending && <Updating />}
+          <div style={dimmed(!!pending)} aria-busy={!!pending}>
+            {audit.rows.length === 0 ? (
+              <s-paragraph>No issues match. Nice work.</s-paragraph>
+            ) : (
+              <s-table>
+                <s-table-header-row>
+                  <s-table-header listSlot="primary">Product</s-table-header>
+                  <s-table-header listSlot="secondary">SKU</s-table-header>
+                  <s-table-header format="currency">Price</s-table-header>
+                  <s-table-header format="currency">Cost</s-table-header>
+                  <s-table-header>Weight</s-table-header>
+                  <s-table-header listSlot="inline">Issues</s-table-header>
+                </s-table-header-row>
+                <s-table-body>
+                  {audit.rows.map((r) => (
+                    <s-table-row key={r.variantId}>
+                      <s-table-cell>
+                        <s-link
+                          href={`shopify://admin/products/${numericId(r.productId)}/variants/${numericId(r.variantId)}`}
+                          target="_blank"
+                        >
+                          {variantLabel(r)}
+                        </s-link>
+                      </s-table-cell>
+                      <s-table-cell>{r.sku ?? "—"}</s-table-cell>
+                      <s-table-cell>${r.price.toFixed(2)}</s-table-cell>
+                      <s-table-cell>{r.cost === null ? "—" : `$${r.cost.toFixed(2)}`}</s-table-cell>
+                      <s-table-cell>
+                        {r.weight ? `${r.weight} ${WEIGHT_UNIT[r.weightUnit ?? ""] ?? r.weightUnit?.toLowerCase() ?? ""}` : "—"}
+                      </s-table-cell>
+                      <s-table-cell>
+                        <s-stack direction="block" gap="small-300">
+                          {r.issues.map((i) => (
+                            // Detail under the badge, so long details wrap in the column.
+                            <s-stack key={i.code} direction="block" gap="small-500">
+                              <s-badge tone={ISSUE_INFO[i.code].severity}>
+                                {ISSUE_INFO[i.code].label}
+                              </s-badge>
+                              <s-text color="subdued">{i.detail}</s-text>
+                            </s-stack>
+                          ))}
+                        </s-stack>
+                      </s-table-cell>
+                    </s-table-row>
+                  ))}
+                </s-table-body>
+              </s-table>
+            )}
+          </div>
           {shownCount > audit.rows.length && (
-            <s-button onClick={() => go({ limit: filters.limit + PAGE_SIZE })}>
+            <s-button
+              onClick={() => go({ limit: filters.limit + PAGE_SIZE })}
+              {...(pending ? { loading: true } : {})}
+            >
               Show more ({(shownCount - audit.rows.length).toLocaleString()} left)
             </s-button>
           )}
