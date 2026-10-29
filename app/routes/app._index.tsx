@@ -140,7 +140,9 @@ export default function AuditPage() {
   const shownCount = filters.issue === "all" && !filters.q ? audit.withIssues : audit.matching;
 
   return (
-    <s-page heading="Catalog audit">
+    // Full width for the issues table; settings sit in the main column, since
+    // wide pages have no side column.
+    <s-page heading="Catalog audit" inlineSize="large">
       <s-button
         slot="primary-action"
         onClick={rescan}
@@ -190,6 +192,24 @@ export default function AuditPage() {
             </s-text>
             {pending && <Updating />}
           </s-stack>
+          <s-stack direction="inline" gap="large" alignItems="end">
+            <s-box inlineSize="220px">
+              <s-number-field
+                label="Minimum margin target (%)"
+                value={margin}
+                min={0}
+                max={100}
+                onInput={(e) => setMargin(e.currentTarget.value)}
+                onChange={(e) => go({ minMargin: Number(e.currentTarget.value) || 0 })}
+              />
+            </s-box>
+            <s-checkbox
+              label="Include draft products"
+              checked={filters.includeDrafts}
+              onChange={(e) => go({ includeDrafts: e.currentTarget.checked })}
+            />
+            <s-text color="subdued">Archived products are never audited.</s-text>
+          </s-stack>
           <s-stack direction="inline" gap="small-200">
             <s-clickable-chip
               color={shownIssue === "all" ? "strong" : "base"}
@@ -225,7 +245,7 @@ export default function AuditPage() {
             {audit.rows.length === 0 ? (
               <s-paragraph>No issues match. Nice work.</s-paragraph>
             ) : (
-              <s-table>
+              <s-table loading={!!pending}>
                 <s-table-header-row>
                   <s-table-header listSlot="primary">Product</s-table-header>
                   <s-table-header listSlot="secondary">SKU</s-table-header>
@@ -281,26 +301,7 @@ export default function AuditPage() {
         </s-stack>
       </s-section>
 
-      <s-section slot="aside" heading="Settings">
-        <s-stack direction="block" gap="base">
-          <s-number-field
-            label="Minimum margin target (%)"
-            value={margin}
-            min={0}
-            max={100}
-            onInput={(e) => setMargin(e.currentTarget.value)}
-            onChange={(e) => go({ minMargin: Number(e.currentTarget.value) || 0 })}
-          />
-          <s-checkbox
-            label="Include draft products"
-            checked={filters.includeDrafts}
-            onChange={(e) => go({ includeDrafts: e.currentTarget.checked })}
-          />
-          <s-text color="subdued">Archived products are never audited.</s-text>
-        </s-stack>
-      </s-section>
-
-      <s-section slot="aside" heading="What gets checked">
+      <s-section heading="What gets checked">
         <s-unordered-list>
           <s-list-item>Critical: price below cost, $0 price, duplicate SKU, missing weight on shippable items</s-list-item>
           <s-list-item>Warning: missing SKU or cost, low margin, duplicate barcode, compare-at price not above price</s-list-item>
