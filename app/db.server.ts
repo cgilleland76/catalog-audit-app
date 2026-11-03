@@ -23,6 +23,12 @@ function databaseUrl() {
   if (!url.searchParams.has("connection_limit")) {
     url.searchParams.set("connection_limit", "1");
   }
+  // An idle Netlify Database sleeps and takes a few seconds to wake; Prisma's
+  // default 5 s connect timeout gave up first. Two tries of 10 s (see
+  // databaseReady) stay inside Netlify's ~26 s request limit.
+  if (!url.searchParams.has("connect_timeout")) {
+    url.searchParams.set("connect_timeout", "10");
+  }
   return url.toString();
 }
 
@@ -54,10 +60,29 @@ const prisma = global.prismaGlobal ?? createClient();
 
 export default prisma;
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// "Can't reach database server": usually a sleeping database still waking.
+const unreachable = (error: unknown) =>
+  (error as { errorCode?: string; code?: string })?.errorCode === "P1001" ||
+  (error as { code?: string })?.code === "P1001";
+
+async function migrateWithRetry() {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await migrate(prisma);
+    } catch (error) {
+      if (!unreachable(error) || attempt >= 2) throw error;
+      console.warn("[db] database not reachable yet; retrying once");
+      await sleep(1000);
+    }
+  }
+}
+
 // Creates or updates the tables once per server instance before first use.
 let migrated: Promise<void> | undefined;
 export function databaseReady() {
-  migrated ??= migrate(prisma).catch((error) => {
+  migrated ??= migrateWithRetry().catch((error) => {
     migrated = undefined; // try again on the next request
     throw error;
   });
