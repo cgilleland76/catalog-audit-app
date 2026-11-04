@@ -1,9 +1,10 @@
 /* eslint-env node */
 // Netlify background function (up to 15 minutes): advances one job by calling
-// the app's /internal/sync until it's finished. A job is a scheduled sync
-// ({ settingId }, started by the hourly dispatcher) or a comparison, fix or
-// undo started from a page ({ comparisonId } / { batchId }). Requests are
-// signed both ways.
+// the app's /internal/sync until it's finished. A job is the hourly dispatch
+// ({ dispatch: true }), a scheduled sync ({ settingId }, started by the
+// dispatch) or a comparison, fix or undo started from a page ({ comparisonId }
+// / { batchId }). A failed call (for example while the database wakes) is
+// retried after 10 seconds. Requests are signed both ways.
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 const sign = (secret) => {
@@ -25,7 +26,7 @@ export default async (request) => {
   const secret = process.env.SHOPIFY_API_SECRET;
   if (!verified(request.headers.get("x-sync-signature"), secret)) return;
   const job = await request.json();
-  const label = job.settingId ?? job.comparisonId ?? job.batchId;
+  const label = job.dispatch ? "dispatch" : (job.settingId ?? job.comparisonId ?? job.batchId);
   const until = Date.now() + 14 * 60_000;
 
   while (Date.now() < until) {
@@ -44,7 +45,7 @@ export default async (request) => {
     const { pending } = await response.json();
     if (!pending) return;
   }
-  if (job.settingId) {
+  if (job.settingId || job.dispatch) {
     console.log(`[sync-worker] ${label}: still running; the next hourly run continues it`);
     return;
   }

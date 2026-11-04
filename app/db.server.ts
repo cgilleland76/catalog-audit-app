@@ -29,6 +29,11 @@ function databaseUrl() {
   if (!url.searchParams.has("connect_timeout")) {
     url.searchParams.set("connect_timeout", "10");
   }
+  // Wait for the pool's one connection longer than connecting may take, so a
+  // slow wake ends as "unreachable" (retried) rather than a pool timeout.
+  if (!url.searchParams.has("pool_timeout")) {
+    url.searchParams.set("pool_timeout", "20");
+  }
   return url.toString();
 }
 
@@ -62,10 +67,13 @@ export default prisma;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// "Can't reach database server": usually a sleeping database still waking.
-const unreachable = (error: unknown) =>
-  (error as { errorCode?: string; code?: string })?.errorCode === "P1001" ||
-  (error as { code?: string })?.code === "P1001";
+// "Can't reach database server" (P1001) or no connection in time (P2024):
+// usually a sleeping database still waking.
+const WAKING = new Set(["P1001", "P2024"]);
+const unreachable = (error: unknown) => {
+  const e = error as { errorCode?: string; code?: string } | null;
+  return WAKING.has(e?.errorCode ?? "") || WAKING.has(e?.code ?? "");
+};
 
 async function migrateWithRetry() {
   for (let attempt = 1; ; attempt++) {

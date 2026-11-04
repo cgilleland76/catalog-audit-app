@@ -305,10 +305,21 @@ const dueWhere = () => ({
   OR: [{ stage: { not: "idle" } }, { nextRunAt: { lte: new Date() } }],
 });
 
-/** Syncs that are due or in progress (for the hourly dispatcher). */
-export const dueSettings = (take = 500) =>
+/**
+ * Syncs that are due or in progress (for the hourly dispatcher). With
+ * `unleased`, only those no worker holds, so a long list of running syncs
+ * can't hide the ones still waiting.
+ */
+export const dueSettings = (take = 500, opts: { unleased?: boolean } = {}) =>
   prisma.syncSetting.findMany({
-    where: dueWhere(),
+    where: opts.unleased
+      ? {
+          AND: [
+            dueWhere(),
+            { OR: [{ leaseUntil: null }, { leaseUntil: { lt: new Date() } }] },
+          ],
+        }
+      : dueWhere(),
     orderBy: { nextRunAt: "asc" },
     take,
     select: { id: true, shop: true, provider: true },
