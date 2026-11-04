@@ -18,6 +18,15 @@ export const UPCOMING: { title: string; description: string }[] = [
 
 export const UPDATES: Update[] = [
   {
+    date: "2026-11-04",
+    title: "ShipBob, and an easier-to-read catalog audit",
+    items: [
+      "Warehouse comparison now works with ShipBob: barcode and cost (customs value) are checked against Shopify, and SKUs ShipBob doesn't have are listed. Weight is compared once ShipBob has measured your products.",
+      "The catalog audit uses the full page width, so each issue's details are readable, and shows when filtered results are still loading.",
+      "More reliable background runs when the app hasn't been used for a while.",
+    ],
+  },
+  {
     date: "2026-10-21",
     title: "Clearer warehouse login messages",
     items: [
@@ -97,7 +106,7 @@ export const FAQ: FaqEntry[] = [
   {
     question: "How do I connect a warehouse system?",
     answer:
-      "Open Warehouse and choose Connect next to your system. For ShipHero, paste an API refresh token (and your customer account ID if your warehouse is a 3PL). For Cin7 Core, create an API application under Integrations → API and paste its Account ID and Application Key. For Veeqo, go to Settings → Users, edit your user and choose Refresh API Key (if there's no API Key section, Veeqo support has to enable API access first). Then choose Test and connect. Tokens are stored encrypted, and you can connect more than one system.",
+      "Open Warehouse and choose Connect next to your system. For ShipHero, paste an API refresh token (and your customer account ID if your warehouse is a 3PL). For Cin7 Core, create an API application under Integrations → API and paste its Account ID and Application Key. For Veeqo, go to Settings → Users, edit your user and choose Refresh API Key (if there's no API Key section, Veeqo support has to enable API access first). For ShipBob, create a Personal Access Token under Integrations → API Tokens and leave Environment blank. Then choose Test and connect. Tokens are stored encrypted, and you can connect more than one system.",
   },
   {
     question: "What happens to my data if I uninstall?",
