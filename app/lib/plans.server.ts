@@ -13,11 +13,6 @@ const ACTIVE_SUBSCRIPTIONS = `#graphql
   }
 `;
 
-// The plan rarely changes, and each instance serves few shops; a short cache
-// saves a GraphQL call on every page load.
-const cache = new Map<string, { plan: PlanId; at: number }>();
-const CACHE_MS = 60_000;
-
 /**
  * The dev app has no App Store pricing; its site sets PLAN_OVERRIDE (e.g.
  * "warehouse") to unlock features for testing. Never set it on the public site.
@@ -27,16 +22,17 @@ export function planOverride(): PlanId | null {
   return value === "free" || value === "pro" || value === "warehouse" ? value : null;
 }
 
-/** The shop's current SKU Doctor plan, from its active Shopify App Pricing subscription. */
+/**
+ * The shop's current SKU Doctor plan, from its active Shopify App Pricing
+ * subscription. Asked on every use, not cached: right after a merchant changes
+ * plan, the app must already show the new one (App Store requirement 1.2.3).
+ */
 export async function getPlan(
   shop: string,
   admin: AdminApiContext,
 ): Promise<PlanId> {
   const override = planOverride();
   if (override) return override;
-
-  const hit = cache.get(shop);
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit.plan;
 
   const response = await admin.graphql(ACTIVE_SUBSCRIPTIONS);
   const json = (await response.json()) as {
@@ -50,13 +46,11 @@ export async function getPlan(
     .filter((s) => s.status === "ACTIVE")
     .map((s) => s.name.toLowerCase());
 
-  const plan: PlanId = names.some((n) => n.includes("warehouse"))
+  return names.some((n) => n.includes("warehouse"))
     ? "warehouse"
     : names.some((n) => n.includes("pro"))
       ? "pro"
       : "free";
-  cache.set(shop, { plan, at: Date.now() });
-  return plan;
 }
 
 /**
