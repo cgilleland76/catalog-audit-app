@@ -18,6 +18,7 @@
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
     "typecheck": "react-router typegen && tsc --noEmit",
+    "test": "node --test test/*.test.ts",
     "env:check": "node --env-file-if-exists=.env scripts/check-env.mjs",
     "env:push": "node scripts/env-push.mjs"
   },
