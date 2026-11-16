@@ -1,5 +1,5 @@
 import type { WmsCredentials, WmsProduct, WmsProvider } from "./types";
-import { TO_LB } from "./units";
+import { TO_LB } from "./units.ts";
 
 // ShipBob's REST API uses dated versions; products list 250 per page.
 const API_VERSION = "2026-07";
@@ -187,8 +187,10 @@ export const shipbob: WmsProvider = {
     const base = baseUrl(credentials);
     const wanted = new Set(skus.map((s) => s.trim().toLowerCase()));
     const found: WmsProduct[] = [];
+    // `first` is the first SKU of the last page read, to notice a page that
+    // repeats (ShipBob ignoring the page number) instead of looping on it.
     let state = cursor
-      ? (JSON.parse(cursor) as { url?: string; page?: number })
+      ? (JSON.parse(cursor) as { url?: string; page?: number; first?: string })
       : { page: 1 };
 
     try {
@@ -205,10 +207,17 @@ export const shipbob: WmsProvider = {
           }
         }
 
+        const first = items.length ? variantsOf(items[0])[0]?.sku : undefined;
         const next = nextUrlOf(body, link, base);
-        if (next) state = { url: next };
-        else if (items.length >= PAGE_SIZE) state = { page: (state.page ?? 1) + 1 };
-        else return { found, processed: skus.length, cursor: null }; // last page
+        const last =
+          items.length === 0 ||
+          // Pages linked by ShipBob end where the links do.
+          (!next && Boolean(state.url)) ||
+          (!state.url && first !== undefined && first === state.first);
+        if (last) return { found, processed: skus.length, cursor: null };
+        // Follow ShipBob's next link; without one, ask for the next page until a
+        // page comes back empty (its page size may be smaller than ours).
+        state = next ? { url: next, first } : { page: (state.page ?? 1) + 1, first };
       }
     } catch (error) {
       if (!(error instanceof OutOfTime)) throw error;

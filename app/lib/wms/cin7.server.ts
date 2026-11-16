@@ -1,5 +1,5 @@
 import type { WmsCredentials, WmsProduct, WmsProvider } from "./types";
-import { TO_LB } from "./units";
+import { TO_LB } from "./units.ts";
 
 // Cin7 Core (formerly DEAR Inventory) API v2.
 const BASE_URL = "https://inventory.dearsystems.com/ExternalApi/v2";
@@ -114,8 +114,9 @@ export const cin7: WmsProvider = {
   async lookup(credentials, skus, deadline, cursor) {
     const wanted = new Set(skus.map((s) => s.trim().toLowerCase()));
     const found: WmsProduct[] = [];
+    // `first` is the first SKU of the last page, to stop if a page repeats.
     let state = cursor
-      ? (JSON.parse(cursor) as { page: number; read: number })
+      ? (JSON.parse(cursor) as { page: number; read: number; first?: string })
       : { page: 1, read: 0 };
 
     try {
@@ -130,12 +131,18 @@ export const cin7: WmsProvider = {
           const product = normalize(p);
           if (product.sku && wanted.has(product.sku.toLowerCase())) found.push(product);
         }
-        state = { page: state.page + 1, read: state.read + products.length };
+        const first = products.length ? String(products[0].SKU ?? "") : undefined;
+        const repeated = first !== undefined && first === state.first;
+        state = { page: state.page + 1, read: state.read + products.length, first };
 
-        // Stop on an empty page or once Total products are read (the page
-        // size Cin7 Core uses may be smaller than the one asked for).
+        // Stop on an empty or repeated page, or once Total products are read
+        // (the page size Cin7 Core uses may be smaller than the one asked for).
         const total = Number(body.Total);
-        if (products.length === 0 || (Number.isFinite(total) && state.read >= total)) {
+        if (
+          products.length === 0 ||
+          repeated ||
+          (Number.isFinite(total) && total > 0 && state.read >= total)
+        ) {
           return { found, processed: skus.length, cursor: null };
         }
       }
