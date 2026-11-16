@@ -89,6 +89,11 @@ export type FaqEntry = { question: string; answer: string };
 
 export const FAQ: FaqEntry[] = [
   {
+    question: "How do I install SKU Doctor?",
+    answer:
+      "Install it from its Shopify App Store page (apps.shopify.com/sku-doctor-1), then open it from Apps in your Shopify admin. Every store starts on the Free plan; paid plans start with a 14-day free trial.",
+  },
+  {
     question: "Does SKU Doctor change my products?",
     answer:
       "Only when you ask it to. Audits, line sheets and comparisons only read your catalog. Fix in Shopify (or a scheduled sync you set to fix) copies the weights, costs or barcodes you choose from your warehouse into Shopify, after keeping the old values so you can undo it. Your warehouse system is never changed.",
@@ -116,4 +121,7 @@ export const FAQ: FaqEntry[] = [
 ];
 
 /** Contact address for support: the SUPPORT_EMAIL variable, or our support address. */
+/** SKU Doctor's Shopify App Store listing (published 2026-11-16). */
+export const APP_STORE_URL = "https://apps.shopify.com/sku-doctor-1";
+
 export const supportEmail = () => process.env.SUPPORT_EMAIL?.trim() || "support@thirdaxiscustoms.com";

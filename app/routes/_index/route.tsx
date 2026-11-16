@@ -1,6 +1,7 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { redirect, Link } from "react-router";
 
+import { APP_STORE_URL } from "../../lib/site-content";
 import styles from "./styles.module.css";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -31,6 +32,9 @@ export default function App() {
           Install SKU Doctor from the Shopify App Store, then open it from Apps
           in your Shopify admin.
         </p>
+        <a className={styles.button} href={APP_STORE_URL}>
+          Get it on the Shopify App Store
+        </a>
         <ul className={styles.list}>
           <li>
             <strong>Catalog audit</strong>
@@ -55,6 +59,7 @@ export default function App() {
           </li>
         </ul>
         <nav className={styles.links}>
+          <a href={APP_STORE_URL}>App Store</a>
           <Link to="/updates">Updates</Link>
           <Link to="/support">Support</Link>
           <Link to="/privacy">Privacy</Link>
