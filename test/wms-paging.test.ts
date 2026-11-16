@@ -80,3 +80,18 @@ test("Cin7 Core: stops when the API ignores the page number", async () => {
   assert.equal((await readAll(cin7.lookup, c7Credentials, c7Skus)).size, 1000);
   assert.ok(calls() <= 2);
 });
+
+test("ShipBob: waits as long as x-retry-after says, resuming in a later step", async () => {
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return new Response('{"statusCode":429}', { status: 429, headers: { "x-retry-after": "25" } });
+  }) as typeof fetch;
+  const started = Date.now();
+  // 25 s doesn't fit in this step: it stops at once and hands back where it was.
+  const r = await shipbob.lookup({ token: "t" }, sbSkus, Date.now() + 6000, null);
+  assert.equal(calls, 1);
+  assert.ok(Date.now() - started < 1000);
+  assert.equal(r.processed, 0);
+  assert.ok(r.cursor);
+});

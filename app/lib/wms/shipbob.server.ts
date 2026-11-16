@@ -1,7 +1,8 @@
 import type { WmsCredentials, WmsProduct, WmsProvider } from "./types";
 import { TO_LB } from "./units.ts";
 
-// ShipBob's REST API uses dated versions; products list 250 per page.
+// ShipBob's REST API uses dated versions; products list up to 250 per page and
+// page with a `next` link (2026-07 has no page-number parameter).
 const API_VERSION = "2026-07";
 const PAGE_SIZE = 250;
 // Time to leave for one more request before the step's deadline.
@@ -33,8 +34,10 @@ async function get(
     if (res.status === 401 || res.status === 403) {
       throw new Error("ShipBob didn't accept the access token. A token stops working when it's revoked or expires, and a sandbox token only works with Environment set to sandbox. Create a new Personal Access Token in ShipBob (Integrations → API Tokens) and enter it again.");
     }
+    // ShipBob allows 150 calls a minute and says how many seconds to wait in
+    // x-retry-after.
     if (res.status === 429 || res.status >= 500) {
-      const retryAfter = Number(res.headers.get("retry-after"));
+      const retryAfter = Number(res.headers.get("x-retry-after") ?? res.headers.get("retry-after"));
       const wait = (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 2 ** attempt) * 1000;
       if (Date.now() + wait > deadline) throw new OutOfTime();
       await sleep(wait);
