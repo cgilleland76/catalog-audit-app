@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
@@ -38,6 +38,7 @@ import { UpgradeSection } from "../components/Upgrade";
 import { Updating, dimmed, usePendingQuery } from "../components/Updating";
 import { ScanBanner, useCatalogScan } from "../components/CatalogScan";
 import { fixStatus, fixSummary, hideModal } from "../components/fixes";
+import { requestReview } from "../lib/review-prompt";
 import { count, downloadFile, numericId, toCsv } from "../lib/catalog";
 import {
   PROVIDERS,
@@ -712,6 +713,20 @@ function WarehouseComparison({
     const timer = setInterval(tick, 2000);
     return () => clearInterval(timer);
   }, [stepping, stepper, provider.id]);
+
+  // A fix the merchant started and watched here that finished cleanly is a
+  // good moment to ask for a review (requestReview decides if it's due).
+  const watching = useRef(new Set<string>());
+  useEffect(() => {
+    for (const b of fixes) {
+      if (b.status === "applying") {
+        if (b.source === "manual") watching.current.add(b.id);
+      } else if (watching.current.delete(b.id)) {
+        const clean = b.applied > 0 && b.failed === 0 && !b.error;
+        if (clean && fixStatus(b).label === "Fixed") void requestReview("fix");
+      }
+    }
+  }, [fixes]);
 
   const total = (k: MismatchCode) => counts?.[k].total ?? 0;
   const differences = comparison?.differences ?? 0;

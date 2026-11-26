@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useFetcher, useRevalidator } from "react-router";
 
 import type { ScanState } from "../lib/catalog";
+import { requestReview } from "../lib/review-prompt";
 
 type ScanResponse = { scan: ScanState | null };
 
@@ -41,10 +42,24 @@ export function useCatalogScan(initial: ScanState | null, scannedAt: string | nu
     if (hasNewerRows && revalidator.state === "idle") revalidator.revalidate();
   }, [hasNewerRows, revalidator]);
 
+  // A rescan the merchant started on a shop that already had a scan: once it
+  // finishes, a good moment to ask for a review (requestReview decides if due).
+  const rescanning = useRef(false);
+  useEffect(() => {
+    if (hasNewerRows && rescanning.current) {
+      rescanning.current = false;
+      void requestReview("rescan");
+    }
+  }, [hasNewerRows]);
+
   return {
     scan,
     running: running || starter.state !== "idle" || hasNewerRows,
-    rescan: () => starter.submit({}, { method: "POST", action: "/app/scan" }),
+    rescan: () => {
+      // The first scan doesn't count (scannedAt is null until one finishes).
+      rescanning.current = scannedAt !== null;
+      starter.submit({}, { method: "POST", action: "/app/scan" });
+    },
   };
 }
 

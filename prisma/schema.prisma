@@ -252,3 +252,11 @@ model SyncRun {
 
   @@index([shop, startedAt])
 }
+
+// Per-shop app settings. lastReviewPromptAt: when SKU Doctor last asked
+// Shopify to show its review modal (see app/lib/review-prompt.ts).
+model ShopSettings {
+  shop               String    @id
+  lastReviewPromptAt DateTime?
+  updatedAt          DateTime  @updatedAt
+}

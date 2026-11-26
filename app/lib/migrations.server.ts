@@ -349,6 +349,21 @@ ADD COLUMN     "height" DOUBLE PRECISION,
 ADD COLUMN     "dimUnit" TEXT;
 `,
   },
+  {
+    name: "20261126120000_shop_settings",
+    sql: `
+-- CreateTable
+CREATE TABLE "ShopSettings" (
+    "shop" TEXT NOT NULL,
+    "lastReviewPromptAt" TIMESTAMP(3),
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ShopSettings_pkey" PRIMARY KEY ("shop")
+);
+
+ALTER TABLE "ShopSettings" ENABLE ROW LEVEL SECURITY;
+`,
+  },
 ];
 
 const statements = (sql: string) =>
